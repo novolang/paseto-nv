@@ -1,0 +1,256 @@
+// paspolicy.nv — what this service accepts, as a value somebody wrote
+// down.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// jwt-nv'S SHAPE, DELIBERATELY.  A consumer switching between the two
+// packages should change type names and nothing else, so this is
+// `strict()` narrowed by `allowing`-style builders and checked once at
+// start-up, exactly as `JwtPolicy` is.
+//
+// `strict()` REQUIRES AN EXPIRY, REQUIRES AN ISSUER MATCH AND REQUIRES
+// AN AUDIENCE MATCH, and it names neither — so a caller must fill
+// those in before it can validate anything.  The awkwardness is the
+// point: it is the one moment at which somebody looks at what their
+// service accepts, instead of inheriting `verify_aud=False` from a
+// library author.
+//
+// WHAT IS DIFFERENT FROM jwt-nv, and it is one thing: there is no
+// `allowing(p, algs)`.  A JWT policy has to say which algorithms it
+// accepts because a JWT names its own; a PASETO token's version and
+// purpose are a fixed prefix and the KEY decides what can open it, so
+// there is nothing to allow.  That absence is the format's advantage
+// showing up in an API, and it is why this policy is shorter than
+// jwt-nv's by exactly the part that closes JWT's worst attack.
+//
+// THE CLOCK SKEW IS A NUMBER SOMEBODY CHOSE.  Two machines' clocks
+// differ, and a token issued a second in the future is the single most
+// common false rejection in production.  `with_leeway` is the
+// allowance, in seconds, and it is NOT a default: a service that
+// silently accepted a minute of skew would also silently accept a
+// minute of expired token, and which of those matters is the
+// operator's call.
+
+// ── The value ────────────────────────────────────────────────────────
+
+// What a verifier will accept.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.leeway_seconds(paspolicy.strict())}")   // 0
+// ```
+pub struct PasPolicy
+    // The issuer a token must name, or `""` for "not yet decided",
+    // which `check` refuses.
+    issuer: Str
+    // The audience a token must name, or `""`.
+    audience: Str
+    // Whether a token without `exp` is refused.
+    require_expiration: Bool
+    // Whether a token without `nbf` is refused.
+    require_not_before: Bool
+    // Whether a token without `iat` is refused.
+    require_issued_at: Bool
+    // Whether a token without `sub` is refused.
+    require_subject: Bool
+    // How many seconds of clock difference between this machine and
+    // the issuer's are tolerated.
+    leeway: Int
+
+// The policy that accepts nothing until it is narrowed.
+//
+// Requires an expiry, requires an issuer match, requires an audience
+// match — and names neither issuer nor audience, so `check` refuses it
+// until a caller has said what they are.  Leeway is zero.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     match paspolicy.check(paspolicy.strict())
+//         Ok(_)  => println("this cannot happen — strict() names no issuer")
+//         Err(_) => println("fill in the issuer and the audience")
+// ```
+pub fn strict() -> PasPolicy []
+    todo("paseto-nv.paspolicy.strict")
+
+// The policy with the issuer and audience it requires.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     let p = paspolicy.requiring(paspolicy.strict(), "https://auth.example", "api")
+//     println(paspolicy.issuer(p))
+// ```
+pub fn requiring(p: PasPolicy, issuer: Str, audience: Str) -> PasPolicy []
+    todo("paseto-nv.paspolicy.requiring")
+
+// The policy with `n` seconds of clock skew allowed either way.
+//
+// No default, for the reason in the module header: leeway that accepts
+// a minute of skew also accepts a minute of expired token.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.leeway_seconds(paspolicy.with_leeway(paspolicy.strict(), 30))}")
+// ```
+pub fn with_leeway(p: PasPolicy, n: Int) -> PasPolicy []
+    todo("paseto-nv.paspolicy.with_leeway")
+
+// The policy with the expiry requirement relaxed.
+//
+// NAMED SO IT IS VISIBLE IN A DIFF.  A token with no expiry is valid
+// forever, which is right for a signed artefact and wrong for a
+// session, and a reviewer should see this call rather than an absent
+// argument.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     let p = paspolicy.allowing_no_expiration(paspolicy.strict())
+//     println("${paspolicy.requires_expiration(p)}")   // false
+// ```
+pub fn allowing_no_expiration(p: PasPolicy) -> PasPolicy []
+    todo("paseto-nv.paspolicy.allowing_no_expiration")
+
+// The policy that also requires `nbf`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.requires_not_before(paspolicy.requiring_not_before(paspolicy.strict()))}")
+// ```
+pub fn requiring_not_before(p: PasPolicy) -> PasPolicy []
+    todo("paseto-nv.paspolicy.requiring_not_before")
+
+// The policy that also requires `iat`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.requires_issued_at(paspolicy.requiring_issued_at(paspolicy.strict()))}")
+// ```
+pub fn requiring_issued_at(p: PasPolicy) -> PasPolicy []
+    todo("paseto-nv.paspolicy.requiring_issued_at")
+
+// The policy that also requires `sub`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.requires_subject(paspolicy.requiring_subject(paspolicy.strict()))}")
+// ```
+pub fn requiring_subject(p: PasPolicy) -> PasPolicy []
+    todo("paseto-nv.paspolicy.requiring_subject")
+
+// ── Reading a policy ─────────────────────────────────────────────────
+
+// The issuer the policy requires, or `""`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println(paspolicy.issuer(paspolicy.requiring(paspolicy.strict(), "a", "b")))
+// ```
+pub fn issuer(p: PasPolicy) -> Str []
+    todo("paseto-nv.paspolicy.issuer")
+
+// The audience the policy requires, or `""`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println(paspolicy.audience(paspolicy.requiring(paspolicy.strict(), "a", "b")))
+// ```
+pub fn audience(p: PasPolicy) -> Str []
+    todo("paseto-nv.paspolicy.audience")
+
+// Whether the policy requires `exp`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.requires_expiration(paspolicy.strict())}")   // true
+// ```
+pub fn requires_expiration(p: PasPolicy) -> Bool []
+    todo("paseto-nv.paspolicy.requires_expiration")
+
+// Whether the policy requires `nbf`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.requires_not_before(paspolicy.strict())}")   // false
+// ```
+pub fn requires_not_before(p: PasPolicy) -> Bool []
+    todo("paseto-nv.paspolicy.requires_not_before")
+
+// Whether the policy requires `iat`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.requires_issued_at(paspolicy.strict())}")    // false
+// ```
+pub fn requires_issued_at(p: PasPolicy) -> Bool []
+    todo("paseto-nv.paspolicy.requires_issued_at")
+
+// Whether the policy requires `sub`.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.requires_subject(paspolicy.strict())}")      // false
+// ```
+pub fn requires_subject(p: PasPolicy) -> Bool []
+    todo("paseto-nv.paspolicy.requires_subject")
+
+// How many seconds of clock skew the policy allows.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     println("${paspolicy.leeway_seconds(paspolicy.strict())}")        // 0
+// ```
+pub fn leeway_seconds(p: PasPolicy) -> Int []
+    todo("paseto-nv.paspolicy.leeway_seconds")
+
+// ── Checking a policy ────────────────────────────────────────────────
+
+// `Ok` if the policy is usable, `PasPolicyUnusable` with the field
+// named if it is not.
+//
+// CALL IT AT START-UP.  A policy that names no issuer refuses every
+// token, and finding that out per request produces a stream of
+// rejections that look like a client's fault.  Here the message names
+// the field, once, at the moment somebody can fix it — which is
+// jwt-nv's `jwtpolicy.check` under this package's name and for the
+// same reason.
+//
+// ```novo
+// use paspolicy
+//
+// fn main() [io]
+//     match paspolicy.check(paspolicy.requiring(paspolicy.strict(), "https://auth.example", "api"))
+//         Ok(_)  => println("usable")
+//         Err(_) => println("unusable")
+// ```
+pub fn check(p: PasPolicy) -> Result<Bool, PasError> []
+    todo("paseto-nv.paspolicy.check")

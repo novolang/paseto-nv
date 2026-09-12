@@ -1,0 +1,109 @@
+// paskey_tests.nv — the prefix that replaces an algorithm field, the
+// key pair's two halves, and the verified token's two readers.
+//
+// RED ON PURPOSE: every assertion against a FUNCTION reaches
+// `not implemented: paseto-nv.<module>.<fn>`, because every body under
+// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
+// because a constant is not a stub.
+
+use std.bytes
+use std.list
+use std.test
+use ed25519
+use paskey
+use pasclaims
+use paspolicy
+use pasetoken
+use paserk
+
+@test
+fn test_the_version_and_the_purpose_are_named_where_a_log_can_print_them() [io]
+    test.case("one version, and the absence of the others is deliberate")
+    test.assert_eq_str(paskey.version_name(PasV4), "v4")
+    test.case("two purposes, and no third")
+    test.assert_eq_str(paskey.purpose_name(PasLocal), "local")
+    test.assert_eq_str(paskey.purpose_name(PasPublic), "public")
+
+@test
+fn test_a_prefix_parses_back_to_the_version_and_purpose_it_names() [io]
+    test.case("a local token")
+    match paskey.parse_prefix("v4.local.abcdefgh")
+        Ok(vp) =>
+            test.assert_eq_str(paskey.version_name(vp.0), "v4")
+            test.assert_eq_str(paskey.purpose_name(vp.1), "local")
+        Err(_) => test.fail("v4.local. is a prefix this package knows")
+
+    test.case("a public token")
+    match paskey.parse_prefix("v4.public.abcdefgh")
+        Ok(vp) => test.assert_eq_str(paskey.purpose_name(vp.1), "public")
+        Err(_) => test.fail("v4.public. is a prefix this package knows")
+
+    test.case("and a version this package does not do is refused rather than guessed at")
+    match paskey.parse_prefix("v3.local.abcdefgh")
+        Ok(_)  => test.fail("v3 needs P-384 and AES, neither of which is on the grid")
+        Err(_) => test.assert(true)
+
+@test
+fn test_a_decoded_token_reports_its_own_version_and_purpose() [io]
+    test.case("read off the prefix, never out of a field")
+    match pasetoken.decode("v4.local.abcdefghijklmnopqrstuvwxyz0123456789")
+        Ok(t)  =>
+            test.assert_eq_str(paskey.purpose_name(pasetoken.purpose_of(t)), "local")
+            test.assert_eq_str(paskey.version_name(pasetoken.version_of(t)), "v4")
+        Err(_) => test.fail("a v4.local token should decode")
+
+@test
+fn test_claims_and_footer_are_read_off_a_verified_token_and_nothing_else() [io]
+    test.case("`claims_of` and `footer_of` take a VerifiedPaseto, which only verify and decrypt produce")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  =>
+            match pasetoken.decode("v4.local.abcdefghijklmnopqrstuvwxyz0123456789")
+                Ok(t)  =>
+                    match pasetoken.decrypt(t, k, paspolicy.strict(),
+                                            pasclaims.no_implicit(), pasclaims.instant(0))
+                        Ok(v)  =>
+                            test.assert_eq_str(pasclaims.payload_json(pasetoken.claims_of(v)), "{}")
+                            test.assert(pasclaims.footer_is_empty(pasetoken.footer_of(v)))
+                        Err(_) => test.assert(true)
+                Err(_) => test.fail("a v4.local token should decode")
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+@test
+fn test_a_key_pair_s_two_halves_are_two_types_and_one_derives_the_other() [io]
+    test.case("a public key cannot sign, because `sign` does not take one")
+    match paskey.secret_key(list.zeros(32))
+        Ok(sk) =>
+            let pk = paskey.public_key_of(sk)
+            test.assert_eq(list.len(paskey.public_key_bytes(pk)), 32)
+            test.case("and the ed25519-nv key inside is reachable for a caller signing something else")
+            test.assert_eq(list.len(ed25519.seed_of(paskey.signing_key_of(sk))), 32)
+        Err(_) => test.fail("32 zero bytes are a seed")
+
+@test
+fn test_a_key_says_which_purpose_it_is_for() [io]
+    test.case("which is what turns a wrong-key call into a named refusal rather than a type error")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  => test.assert_eq_str(paskey.purpose_name(paskey.local_key_purpose(k)), "local")
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+@test
+fn test_the_public_and_secret_key_strings_round_trip() [io]
+    test.case("k4.public. is 32 bytes")
+    match paskey.public_key(list.zeros(32))
+        Ok(k)  =>
+            let s = paserk.public_to_string(k)
+            match paserk.public_from_string(s)
+                Ok(back) => test.assert_eq(list.len(paskey.public_key_bytes(back)), 32)
+                Err(_)   => test.fail("what was written should read back")
+        Err(_) => test.fail("32 zero bytes are a point")
+
+    test.case("k4.secret. is 64 — the seed then the public key, which is PASERK's convention")
+    match paskey.secret_key(list.zeros(32))
+        Ok(sk) =>
+            let s = paserk.secret_to_string(sk)
+            match paserk.secret_from_string(s)
+                Ok(back) =>
+                    test.assert_eq_str(paserk.public_to_string(paskey.public_key_of(back)),
+                                       paserk.public_to_string(paskey.public_key_of(sk)))
+                Err(_)   => test.fail("what was written should read back")
+        Err(_) => test.fail("32 zero bytes are a seed")

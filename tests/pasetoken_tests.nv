@@ -1,0 +1,180 @@
+// pasetoken_tests.nv — the two token types, the prefix that replaces
+// an algorithm field, and the escape hatch that refuses.
+//
+// RED ON PURPOSE: every assertion against a FUNCTION reaches
+// `not implemented: paseto-nv.<module>.<fn>`, because every body under
+// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
+// because a constant is not a stub.
+//
+// THE VECTORS ARE THE SPECIFICATION'S. `v4.local` and `v4.public` test
+// vectors come from the PASETO test-vector repository, which every
+// implementation runs; the tokens below are its `4-S-1` and `4-E-1`
+// cases.
+
+use std.bytes
+use std.list
+use std.test
+use paskey
+use pasclaims
+use paspolicy
+use pasetoken
+
+fn v4_public_token() -> Str
+    "v4.public.eyJkYXRhIjoidGhpcyBpcyBhIHNpZ25lZCBtZXNzYWdlIiwiZXhwIjoiMjAyMi0wMS0wMVQwMDowMDowMCswMDowMCJ9v3Jt8mx_TdM2ceTGoqwrh4yDFn0XsHvvV_D0DtwQxVrJEBMl0F2caAdgnpKlt4p7xBnx1HcO-SPo8FPp214HDw"
+
+fn v4_local_token() -> Str
+    "v4.local.32VIErrEkmY4JVILovbmfPXKW9wT1OdQepjMTC_MOtjA4kiqw7_tcaOM5GNEcnTxl60WkwMsYXw6FSNb_UdJPXjpzm0KW9ojM5f4O2mRvE2IcweP-PRdoHjd5-RHCiExR1IK6t6-tyebyWG6Ov7kKvBdkrrAJ837lKP3iDag2hzUPHuMKA"
+
+@test
+fn test_a_token_s_version_and_purpose_are_a_prefix_and_not_a_field() [io]
+    test.case("the prefix is a constant a decoder compares against")
+    test.assert_eq_str(paskey.prefix(PasV4, PasLocal), "v4.local.")
+    test.assert_eq_str(paskey.prefix(PasV4, PasPublic), "v4.public.")
+
+    test.case("and there is no algorithm anywhere in the token to negotiate")
+    match pasetoken.decode(v4_public_token())
+        Ok(t)  => test.assert_eq_str(pasetoken.prefix_of(t), "v4.public.")
+        Err(_) => test.fail("the specification's own vector should decode")
+
+@test
+fn test_a_real_paseto_version_this_package_does_not_do_is_named_rather_than_called_malformed() [io]
+    test.case("v2 is deprecated PASETO and v3 is the NIST profile — both real")
+    match pasetoken.decode("v2.local.abcdefghijklmnopqrstuvwxyz0123456789")
+        Ok(_)  => test.fail("v2 is not v4")
+        Err(e) =>
+            match e
+                PasUnknownPrefix(got) => test.assert(got != "")
+                _                     => test.fail("the refusal should quote the prefix it found")
+
+    match pasetoken.decode("v3.public.abcdefghijklmnopqrstuvwxyz0123456789")
+        Ok(_)  => test.fail("v3 is not v4")
+        Err(e) =>
+            match e
+                PasUnknownPrefix(_) => test.assert(true)
+                _                   => test.fail("a real PASETO version is a prefix refusal, not a malformed token")
+
+@test
+fn test_the_part_count_is_three_or_four_and_nothing_else() [io]
+    test.case("three parts is a token with no footer, four is one with")
+    match pasetoken.decode("v4.local")
+        Ok(_)  => test.fail("two parts is not a token")
+        Err(e) =>
+            match e
+                PasBadPartCount(got) => test.assert_eq(got, 2)
+                _                    => test.fail("the refusal should count the parts")
+
+    match pasetoken.decode("v4.local.a.b.c")
+        Ok(_)  => test.fail("five parts is not a token")
+        Err(_) => test.assert(true)
+
+@test
+fn test_the_unverified_footer_is_readable_because_choosing_a_key_needs_it() [io]
+    test.case("a kid in the footer is what a verifier reads before it picks a key")
+    match pasetoken.decode(v4_public_token())
+        Ok(t)  =>
+            test.assert(pasetoken.has_footer(t) == false)
+            test.assert_eq_str(pasclaims.footer_text(pasetoken.unverified_footer(t)), "")
+        Err(_) => test.fail("the specification's own vector should decode")
+
+@test
+fn test_the_escape_hatch_refuses_a_local_token() [io]
+    test.case("a public token's payload was never hidden, so reading it unverified is honest")
+    match pasetoken.decode(v4_public_token())
+        Ok(t)  =>
+            match pasetoken.dangerous_unverified_payload_json(t)
+                Ok(s)  => test.assert(s != "")
+                Err(_) => test.fail("a public token's payload is base64, not a secret")
+        Err(_) => test.fail("the specification's own vector should decode")
+
+    test.case("a local token's payload is ENCRYPTED, and the refusal is where a caller learns the two are not interchangeable")
+    match pasetoken.decode(v4_local_token())
+        Ok(t)  =>
+            match pasetoken.dangerous_unverified_payload_json(t)
+                Ok(_)  => test.fail("a local token's payload cannot be read without the key")
+                Err(_) => test.assert(true)
+        Err(_) => test.fail("the specification's own vector should decode")
+
+@test
+fn test_a_local_key_cannot_open_a_public_token_and_the_refusal_says_so() [io]
+    test.case("PASETO's answer to algorithm confusion, seen from the API")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  =>
+            match pasetoken.decode(v4_public_token())
+                Ok(t)  =>
+                    match pasetoken.decrypt(t, k, paspolicy.strict(),
+                                            pasclaims.no_implicit(), pasclaims.instant(0))
+                        Ok(_)  => test.fail("a local key opened a public token")
+                        Err(e) =>
+                            match e
+                                PasPurposeMismatch(_, _) => test.assert(true)
+                                _                        => test.fail("the refusal should name both purposes")
+                Err(_) => test.fail("the specification's own vector should decode")
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+@test
+fn test_a_wrong_key_is_a_mac_or_signature_failure_that_says_nothing_else() [io]
+    test.case("there is exactly one thing a caller may learn")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  =>
+            match pasetoken.decode(v4_local_token())
+                Ok(t)  =>
+                    match pasetoken.decrypt(t, k, paspolicy.strict(),
+                                            pasclaims.no_implicit(), pasclaims.instant(0))
+                        Ok(_)  => test.fail("the all-zero key is not this token's")
+                        Err(e) =>
+                            match e
+                                PasBadMac => test.assert(true)
+                                _         => test.fail("a wrong key is a MAC failure and nothing more specific")
+                Err(_) => test.fail("the specification's own vector should decode")
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+@test
+fn test_the_implicit_assertion_binds_a_token_to_a_context_it_never_carries() [io]
+    test.case("the same token with two different assertions does not verify twice")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  =>
+            match pasetoken.encrypt(k, "{}", pasclaims.no_footer(),
+                                    pasclaims.implicit("tenant-a"), bytes.zeros(32))
+                Ok(a)  =>
+                    match pasetoken.encrypt(k, "{}", pasclaims.no_footer(),
+                                            pasclaims.implicit("tenant-b"), bytes.zeros(32))
+                        Ok(b)  =>
+                            test.case("and the token bytes DIFFER, because the assertion is authenticated")
+                            test.assert(a != b)
+                        Err(_) => test.fail("encrypting was refused")
+                Err(_) => test.fail("encrypting was refused")
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+@test
+fn test_signing_needs_no_entropy_at_all() [io]
+    test.case("Ed25519 is deterministic, so the same inputs give the same token")
+    match paskey.secret_key(list.zeros(32))
+        Ok(k)  =>
+            match pasetoken.sign(k, "{}", pasclaims.no_footer(), pasclaims.no_implicit())
+                Ok(a)  =>
+                    match pasetoken.sign(k, "{}", pasclaims.no_footer(), pasclaims.no_implicit())
+                        Ok(b)  => test.assert_eq_str(a, b)
+                        Err(_) => test.fail("the second signing was refused")
+                Err(_) => test.fail("signing was refused")
+        Err(_) => test.fail("32 zero bytes are a seed")
+
+@test
+fn test_the_pre_authentication_bytes_can_be_diffed_against_the_specification() [io]
+    test.case("this is where a port disagrees with everybody and cannot tell why")
+    match pasetoken.pre_auth(PasV4, PasPublic, bytes.zeros(0),
+                             pasclaims.no_footer(), pasclaims.no_implicit())
+        Ok(b)  =>
+            // Four pieces — header, payload, footer, implicit — each
+            // with its own length, and the count in front.
+            test.assert(bytes.len(b) >= 8)
+        Err(_) => test.fail("the empty case should encode")
+
+    test.case("and the implicit assertion IS in it, which is what makes it bind")
+    match pasetoken.pre_auth(PasV4, PasPublic, bytes.zeros(0),
+                             pasclaims.no_footer(), pasclaims.implicit("t"))
+        Ok(c)  =>
+            match pasetoken.pre_auth(PasV4, PasPublic, bytes.zeros(0),
+                                     pasclaims.no_footer(), pasclaims.no_implicit())
+                Ok(d)  => test.assert(bytes.to_hex(c) != bytes.to_hex(d))
+                Err(_) => test.fail("the empty case should encode")
+        Err(_) => test.fail("the assertion case should encode")

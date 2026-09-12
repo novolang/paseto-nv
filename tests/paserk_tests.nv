@@ -1,0 +1,147 @@
+// paserk_tests.nv — the keys written down, and the identifiers that
+// name them without revealing them.
+//
+// RED ON PURPOSE: every assertion against a FUNCTION reaches
+// `not implemented: paseto-nv.<module>.<fn>`, because every body under
+// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
+// because a constant is not a stub.
+
+use std.bytes
+use std.list
+use std.test
+use paskey
+use paserk
+
+@test
+fn test_the_type_is_a_prefix_a_parser_compares_rather_than_a_field_it_reads() [io]
+    test.case("the six prefixes, spelled once")
+    test.assert_eq_str(paserk.type_prefix(PaserkLocal), "k4.local.")
+    test.assert_eq_str(paserk.type_prefix(PaserkPublic), "k4.public.")
+    test.assert_eq_str(paserk.type_prefix(PaserkSecret), "k4.secret.")
+    test.assert_eq_str(paserk.type_prefix(PaserkLocalId), "k4.lid.")
+    test.assert_eq_str(paserk.type_prefix(PaserkPublicId), "k4.pid.")
+    test.assert_eq_str(paserk.type_prefix(PaserkSecretId), "k4.sid.")
+
+    test.case("and the constants agree with the enum")
+    test.assert_eq_str(paserk.PASERK_LOCAL, "k4.local.")
+    test.assert_eq_str(paserk.PASERK_SECRET_ID, "k4.sid.")
+
+@test
+fn test_a_public_key_string_cannot_be_loaded_as_a_local_key() [io]
+    test.case("the prefix is checked first, and the refusal names the two purposes")
+    match paserk.local_from_string("k4.public.cHVibGljIGtleSBieXRlcyBnbyBoZXJlLi4u")
+        Ok(_)  => test.fail("a public key string was loaded into a local key slot")
+        Err(e) =>
+            match e
+                PasPurposeMismatch(_, _) => test.assert(true)
+                _                        => test.fail("the refusal should name both purposes, not the length")
+
+@test
+fn test_an_unknown_paserk_type_is_named_rather_than_called_malformed() [io]
+    test.case("`k4.local-wrap.pie.` is real PASERK and is outside this package")
+    match paserk.type_of("k4.local-wrap.pie.abc")
+        Ok(_)  => test.fail("the wrapping tier is not in 0.0.1")
+        Err(e) =>
+            match e
+                PasUnknownPaserkType(got) => test.assert(got != "")
+                _                         => test.fail("the refusal should quote the type it found")
+
+    test.case("and so is `k4.seal.`")
+    match paserk.type_of("k4.seal.abc")
+        Ok(_)  => test.fail("the sealing tier is not in 0.0.1")
+        Err(_) => test.assert(true)
+
+@test
+fn test_a_local_key_round_trips_through_its_string() [io]
+    test.case("thirty-two bytes in, thirty-two bytes out")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  =>
+            let s = paserk.local_to_string(k)
+            match paserk.local_from_string(s)
+                Ok(back) =>
+                    test.assert_eq_str(bytes.to_hex(paskey.local_key_bytes(back)),
+                                       bytes.to_hex(paskey.local_key_bytes(k)))
+                Err(_)   => test.fail("what was written should read back")
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+@test
+fn test_a_secret_key_string_is_sixty_four_bytes_and_the_halves_must_agree() [io]
+    test.case("the seed then the public key, which is PASERK's convention and not ed25519-nv's")
+    test.assert_eq(paskey.PAS_SEED_BYTES, 32)
+    test.assert_eq(paskey.PAS_PUBLIC_KEY_BYTES, 32)
+
+    test.case("a pair whose halves disagree is a key file that was edited, and is refused at load")
+    // 64 bytes of zeros: the trailing 32 are not the public key the
+    // leading 32 derive.
+    match paserk.secret_from_string("k4.secret.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        Ok(_)  => test.fail("a mismatched seed and public key should be refused")
+        Err(_) => test.assert(true)
+
+@test
+fn test_an_identifier_is_one_way_and_therefore_safe_to_log() [io]
+    test.case("thirty-three bytes, which is not a typo for thirty-two")
+    test.assert_eq(paserk.PASERK_ID_BYTES, 33)
+
+    test.case("a local key's identifier is a k4.lid. string")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  =>
+            let id = paserk.local_id(k)
+            test.assert(id != "")
+            match paserk.type_of(id)
+                Ok(t)  => test.assert_eq_str(paserk.type_prefix(t), "k4.lid.")
+                Err(_) => test.fail("an identifier should have a readable type")
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+    test.case("and the identifier types are NOT secrets, while the key types are")
+    test.assert(paserk.is_secret(PaserkLocal))
+    test.assert(paserk.is_secret(PaserkSecret))
+    test.assert(paserk.is_secret(PaserkPublic) == false)
+    test.assert(paserk.is_secret(PaserkLocalId) == false)
+    test.assert(paserk.is_secret(PaserkSecretId) == false)
+
+@test
+fn test_a_public_key_and_its_secret_key_have_different_identifiers() [io]
+    test.case("k4.pid. and k4.sid. name two different things about one key pair")
+    match paskey.secret_key(list.zeros(32))
+        Ok(sk) =>
+            let sid = paserk.secret_id(sk)
+            let pid = paserk.public_id(paskey.public_key_of(sk))
+            test.assert(sid != pid)
+        Err(_) => test.fail("32 zero bytes are a seed")
+
+@test
+fn test_a_kid_lookup_is_a_comparison_and_it_is_constant_time() [io]
+    test.case("a service with three keys checks each; one with more has a cache, which is a host's job")
+    match paskey.local_key(bytes.zeros(32))
+        Ok(k)  => test.assert(paserk.local_id_matches(k, paserk.local_id(k)))
+        Err(_) => test.fail("32 zero bytes are a local key")
+
+    match paskey.public_key(list.zeros(32))
+        Ok(k)  =>
+            test.assert(paserk.public_id_matches(k, paserk.public_id(k)))
+            test.assert(paserk.public_id_matches(k, "k4.pid.notthisone") == false)
+        Err(_) => test.fail("32 zero bytes are a point")
+
+@test
+fn test_the_signature_strictness_is_fixed_because_a_token_format_wants_one_valid_signature() [io]
+    test.case("EdStrict — cofactorless, canonical, small-order refused")
+    match paskey.signature_strictness()
+        EdStrict => test.assert(true)
+        _        => test.fail("a token format wants exactly one valid signature per message per key")
+
+@test
+fn test_the_key_widths_are_the_specification_s() [io]
+    test.assert_eq(paskey.PAS_LOCAL_KEY_BYTES, 32)
+    test.assert_eq(paskey.PAS_SIGNATURE_BYTES, 64)
+    test.assert_eq(paskey.PAS_NONCE_BYTES, 32)
+    test.assert_eq(paskey.PAS_MAC_BYTES, 32)
+
+    test.case("and a key of the wrong width is refused by name")
+    match paskey.local_key(bytes.zeros(16))
+        Ok(_)  => test.fail("sixteen bytes is not a v4.local key")
+        Err(e) =>
+            match e
+                PasKeyLengthWrong(got, want) =>
+                    test.assert_eq(got, 16)
+                    test.assert_eq(want, 32)
+                _                            => test.fail("the refusal should name both numbers")

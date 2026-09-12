@@ -1,0 +1,127 @@
+// paspae.nv — PAE, the Pre-Authentication Encoding, which is the one
+// piece of PASETO that is neither a cipher nor a signature and the one
+// a port gets wrong.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// WHAT IT IS AND WHY IT EXISTS.  Every PASETO token authenticates
+// several pieces at once: the header, the nonce, the ciphertext, the
+// footer, and the implicit assertion.  Concatenating them and MACing
+// the result is the classic mistake — `("ab", "c")` and `("a", "bc")`
+// concatenate to the same bytes, so an attacker who can move a byte
+// from one piece to another produces a different token with the same
+// MAC.  On a token that is
+//
+//     header || nonce || ciphertext || footer
+//
+// that is a footer byte moved into the ciphertext and back, which is a
+// forgery.
+//
+// PAE makes the split unambiguous:
+//
+//     LE64(count) || for each piece: LE64(len(piece)) || piece
+//
+// so the lengths are inside what is authenticated and no two different
+// tuples encode to the same bytes.
+//
+// THE TOP BIT OF EVERY LENGTH IS CLEARED.  PASETO's specification says
+// so explicitly, and the reason is JavaScript: a length above 2^53
+// cannot be represented exactly as a double, and a language whose
+// integers are doubles would encode a different number than it read.
+// Clearing bit 63 makes every implementation agree.  `MAX_PIECE_BYTES`
+// is that bound, and `encode` refuses past it rather than truncating.
+//
+// PUBLIC BECAUSE THE SPECIFICATION GIVES VECTORS FOR IT.  PAE of the
+// empty list, of one empty string, and of `["", ""]` are three of the
+// test cases every PASETO implementation runs, and a port that passes
+// them has the hardest part right.  It is also what a caller
+// implementing a v3 profile or an extension would need, and there is
+// no reason to make them write it again.
+
+use std.bytes
+
+// ── Limits ───────────────────────────────────────────────────────────
+
+// The longest a single piece may be: 2^63 - 1, the largest value a
+// length with its top bit cleared can name.
+//
+// Unreachable from this package's own calls — a token is not eight
+// exabytes — and stated because the specification states it, and
+// because `encode` refuses rather than truncating.
+pub const PAE_MAX_PIECE_BYTES = 9223372036854775807
+
+// ── Encoding ─────────────────────────────────────────────────────────
+
+// How many bytes `encode_into` writes for these pieces: eight for the
+// count, then eight plus its length for each.
+//
+// Call it, size one buffer, write once.
+//
+// ```novo
+// use std.bytes
+// use paspae
+//
+// fn main() [io]
+//     println("${paspae.encode_len([])}")         // 8
+// ```
+pub fn encode_len(pieces: [Bytes]) -> Int []
+    todo("paseto-nv.paspae.encode_len")
+
+// Write the pre-authentication encoding of `pieces` at `dst`'s
+// position; the count comes back.
+//
+// The count and every length are LITTLE-endian 64-bit, top bit
+// cleared.  `PasPaeTooLong` if a piece is longer than
+// `PAE_MAX_PIECE_BYTES`; `PasOutputTooSmall` if the buffer is short,
+// and then nothing is written.
+//
+// ```novo
+// use std.bytes
+// use paspae
+//
+// fn main() [io]
+//     var c = bytes.cursor_le(bytes.zeros(paspae.encode_len([])))
+//     match paspae.encode_into([], c)
+//         Ok(n)  => println("${n}")               // 8
+//         Err(_) => println("refused")
+// ```
+pub fn encode_into(pieces: [Bytes], mut dst: Cursor) -> Result<Int, PasError> []
+    todo("paseto-nv.paspae.encode_into")
+
+// The pre-authentication encoding of `pieces`, in a buffer of its own.
+//
+// The convenience shape, and the only function in this module that
+// allocates.  A caller inside a request handler uses `encode_into`
+// with a buffer it reuses; a test uses this.
+//
+// ```novo
+// use std.bytes
+// use paspae
+//
+// fn main() [io]
+//     match paspae.encode([])
+//         Ok(b)  => println(bytes.to_hex(b))      // 0000000000000000
+//         Err(_) => println("refused")
+// ```
+pub fn encode(pieces: [Bytes]) -> Result<Bytes, PasError> []
+    todo("paseto-nv.paspae.encode")
+
+// One length field: `n` as a little-endian 64-bit number with bit 63
+// cleared, written into `out`.
+//
+// Public so that the JavaScript rule the module header describes can
+// be tested on its own, and so that a caller writing a v3 profile has
+// the primitive rather than a comment telling them what to write.
+//
+// `out` must be at least 8 bytes and comes back.
+//
+// ```novo
+// use std.bytes
+// use paspae
+//
+// fn main() [io]
+//     println(bytes.to_hex(paspae.length_field(1, bytes.zeros(8))))   // 0100000000000000
+// ```
+pub fn length_field(n: Int, out: Bytes) -> Bytes []
+    todo("paseto-nv.paspae.length_field")

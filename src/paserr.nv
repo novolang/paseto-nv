@@ -1,0 +1,159 @@
+// paserr.nv — one error type for the decoder, the two purposes, the
+// claim validator and PASERK.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// THE VARIANTS SPLIT THREE WAYS, and a caller acts on the split.
+//
+//   * A MALFORMED token — a bad prefix, a body that is not base64, a
+//     part count that is not three or four.  That is a client sending
+//     rubbish, or a proxy mangling a header.
+//   * A token that did not AUTHENTICATE — a MAC or a signature that
+//     did not match.  That is an attack or a key rotation, and it is
+//     what a rate limiter counts.
+//   * A token that authenticated and was REFUSED BY POLICY — expired,
+//     not yet valid, wrong issuer, wrong audience.  That is an
+//     ordinary "log in again", and a service that alerted on it would
+//     alert every day.
+//
+// `is_authentication_failure` and `is_policy_refusal` are the two
+// predicates that make the split usable without matching every
+// variant, and a service that logs all three the same way either
+// drowns its alerts or misses an attack in them.
+//
+// `PasBadMac` and `PasBadSignature` carry NOTHING.  There is exactly
+// one thing a caller may learn from either, and a variant with a byte
+// offset in it would be a position oracle over a token an attacker is
+// editing.
+
+// What went wrong reading, verifying or validating a token.
+pub enum PasError
+    // The token does not start with a version-and-purpose prefix this
+    // package knows.  `got` is the prefix as read, truncated, so a log
+    // can show `v2.local.` or `v3.public.` — both real PASETO and both
+    // outside this package.
+    PasUnknownPrefix(got: Str)
+    // The token has the wrong number of `.`-separated parts: three
+    // without a footer, four with one.
+    PasBadPartCount(got: Int)
+    // A part is not valid unpadded base64url.  `part` names which —
+    // `payload` or `footer` — and `at` is the character offset.
+    PasBadBase64(part: Str, at: Int)
+    // The payload is shorter than the version's fixed fields need: for
+    // v4.local, 32 bytes of nonce and 32 of MAC; for v4.public, 64
+    // bytes of signature.
+    PasPayloadTooShort(got: Int, want: Int)
+    // A key of the wrong width reached a constructor.
+    PasKeyLengthWrong(got: Int, want: Int)
+    // The key's purpose is not the token's.  A local key cannot verify
+    // a public token and a public key cannot decrypt a local one, and
+    // this is the refusal that says so by name — the algorithm
+    // confusion that JWT's `alg` header makes possible has nothing to
+    // confuse here, and this variant is what a caller sees if they try
+    // it anyway.
+    PasPurposeMismatch(token: Str, key: Str)
+    // The MAC over a v4.local token did not match.  NOTHING ELSE IS
+    // SAID and nothing was decrypted.
+    PasBadMac
+    // The signature on a v4.public token did not verify.  NOTHING ELSE
+    // IS SAID.
+    PasBadSignature
+    // The claims are not a JSON object, or a registered claim is not
+    // the type the specification gives it.  `claim` names which.
+    PasBadClaims(claim: Str)
+    // A registered timestamp claim is not an RFC 3339 string.  `claim`
+    // names which and `at` is the character offset calendar-nv
+    // reported.
+    PasBadTimestamp(claim: Str, at: Int)
+    // The token has expired.  `exp` and `now` are both seconds since
+    // the epoch, so a message can say by how much — which is the one
+    // number that tells a support engineer whether a clock is wrong or
+    // a session is old.
+    PasExpired(exp: Int, now: Int)
+    // The token is not valid yet.
+    PasNotYetValid(nbf: Int, now: Int)
+    // A claim the policy required is absent.
+    PasClaimMissing(claim: Str)
+    // A claim the policy constrained does not match.  `claim`, `want`
+    // and `got`, so a mismatched audience names both sides.
+    PasClaimMismatch(claim: Str, want: Str, got: Str)
+    // The policy itself is unusable — it accepts nothing, or requires
+    // a claim and also forbids it.  Caught by `paspolicy.check` at
+    // start-up, where the message can name the field, rather than per
+    // request as a stream of rejections that look like a client's
+    // fault.
+    PasPolicyUnusable(why: Str)
+    // A PASERK string does not start with a type this package knows.
+    PasUnknownPaserkType(got: Str)
+    // A PASERK string's data is not the width its type requires.
+    PasBadPaserkData(kind: Str, got: Int, want: Int)
+    // A caller's output buffer has fewer bytes left than the call
+    // needs.  Every function that writes has a `_len` beside it that
+    // prices the call first.
+    PasOutputTooSmall(want: Int, have: Int)
+    // A PAE piece is longer than the encoding can name, or there are
+    // more pieces than it can count.  Unreachable from this package's
+    // own calls and public because `paspae.encode` is.
+    PasPaeTooLong(len: Int)
+
+// What went wrong, in words, for a caller that logs rather than
+// branches.
+//
+// `Result<_, PasError>` requires it: SPEC § 3.4 admits a `Result`
+// error type only if it implements `Error`, so this impl is what lets
+// every function in the package name its own refusal instead of
+// returning `Result<_, Str>`.
+//
+// ```novo
+// use paserr
+//
+// fn main() [io]
+//     println(paserr.describe(PasBadMac))
+// ```
+impl Error for PasError
+    fn message(self) -> Str
+        todo("paseto-nv.paserr.PasError.message")
+
+// The same sentence as `message`, as a free function, for a caller
+// that has an error value rather than a `Result` to call `.message()`
+// on.
+//
+// ```novo
+// use paserr
+//
+// fn main() [io]
+//     println(paserr.describe(PasExpired(1000, 2000)))
+// ```
+pub fn describe(e: PasError) -> Str []
+    todo("paseto-nv.paserr.describe")
+
+// Whether the error means the token was not authentic: `PasBadMac` or
+// `PasBadSignature`, and nothing else.
+//
+// What a rate limiter counts and an alert fires on.
+//
+// ```novo
+// use paserr
+//
+// fn main() [io]
+//     println("${paserr.is_authentication_failure(PasBadMac)}")     // true
+// ```
+pub fn is_authentication_failure(e: PasError) -> Bool []
+    todo("paseto-nv.paserr.is_authentication_failure")
+
+// Whether the error means the token WAS authentic and the policy
+// refused it: expired, not yet valid, a missing or mismatched claim.
+//
+// What a service answers with "log in again" and does NOT alert on.
+// The distinction from the one above is the whole reason both exist:
+// an expiry is a daily event and a bad MAC is not.
+//
+// ```novo
+// use paserr
+//
+// fn main() [io]
+//     println("${paserr.is_policy_refusal(PasExpired(1000, 2000))}")   // true
+// ```
+pub fn is_policy_refusal(e: PasError) -> Bool []
+    todo("paseto-nv.paserr.is_policy_refusal")

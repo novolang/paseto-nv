@@ -1,0 +1,103 @@
+// paspae_tests.nv — PAE, against the specification's own vectors.
+//
+// RED ON PURPOSE: every assertion against a FUNCTION reaches
+// `not implemented: paseto-nv.<module>.<fn>`, because every body under
+// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
+// because a constant is not a stub.
+//
+// THESE FOUR VECTORS ARE THE ONES EVERY PASETO IMPLEMENTATION RUNS.
+// They are in the specification under "Authentication Padding", and a
+// port that passes them has the hardest part right — the count, the
+// per-piece lengths, and the little-endian-with-the-top-bit-cleared
+// encoding of both.
+
+use std.bytes
+use std.test
+use paspae
+
+@test
+fn test_pae_of_no_pieces_is_a_zero_count() [io]
+    test.case("PAE([]) = 0x0000000000000000")
+    test.assert_eq(paspae.encode_len([]), 8)
+    match paspae.encode([])
+        Ok(b)  => test.assert_eq_str(bytes.to_hex(b), "0000000000000000")
+        Err(_) => test.fail("the empty list should encode")
+
+@test
+fn test_pae_of_one_empty_piece_is_a_count_and_a_zero_length() [io]
+    test.case("PAE(['']) = 0x01000000000000000000000000000000")
+    test.assert_eq(paspae.encode_len([bytes.zeros(0)]), 16)
+    match paspae.encode([bytes.zeros(0)])
+        Ok(b)  => test.assert_eq_str(bytes.to_hex(b),
+                                     "01000000000000000000000000000000")
+        Err(_) => test.fail("one empty piece should encode")
+
+@test
+fn test_pae_of_two_empty_pieces_counts_two() [io]
+    test.case("PAE(['', '']) = 0x020000000000000000000000000000000000000000000000")
+    match paspae.encode([bytes.zeros(0), bytes.zeros(0)])
+        Ok(b)  => test.assert_eq_str(
+                      bytes.to_hex(b),
+                      "020000000000000000000000000000000000000000000000")
+        Err(_) => test.fail("two empty pieces should encode")
+
+@test
+fn test_pae_of_one_piece_puts_its_length_in_front_of_it() [io]
+    test.case("PAE(['Paragon']) = 0x0100000000000000070000000000000050617261676f6e")
+    match paspae.encode([bytes.from_str("Paragon")])
+        Ok(b)  => test.assert_eq_str(
+                      bytes.to_hex(b),
+                      "0100000000000000070000000000000050617261676f6e")
+        Err(_) => test.fail("one piece should encode")
+
+@test
+fn test_the_lengths_are_what_stop_a_byte_moving_between_pieces() [io]
+    test.case("this is the whole reason PAE exists")
+    // Concatenating would make these two the same bytes.  PAE does not.
+    match paspae.encode([bytes.from_str("ab"), bytes.from_str("c")])
+        Ok(a)  =>
+            match paspae.encode([bytes.from_str("a"), bytes.from_str("bc")])
+                Ok(b)  => test.assert(bytes.to_hex(a) != bytes.to_hex(b))
+                Err(_) => test.fail("the second pair should encode")
+        Err(_) => test.fail("the first pair should encode")
+
+@test
+fn test_a_length_field_is_little_endian_with_the_top_bit_cleared() [io]
+    test.case("little-endian, which is the opposite of a network order a reader might assume")
+    test.assert_eq_str(bytes.to_hex(paspae.length_field(1, bytes.zeros(8))),
+                       "0100000000000000")
+    test.assert_eq_str(bytes.to_hex(paspae.length_field(7, bytes.zeros(8))),
+                       "0700000000000000")
+    test.assert_eq_str(bytes.to_hex(paspae.length_field(256, bytes.zeros(8))),
+                       "0001000000000000")
+
+    test.case("and bit 63 is cleared, which is the rule JavaScript's doubles made necessary")
+    test.assert_eq(paspae.PAE_MAX_PIECE_BYTES, 9223372036854775807)
+
+@test
+fn test_encoding_into_a_short_buffer_writes_nothing() [io]
+    test.case("a half-written pre-auth string would authenticate a different token")
+    var c = bytes.cursor_le(bytes.zeros(7))
+    match paspae.encode_into([], c)
+        Ok(_)  => test.fail("eight bytes do not fit in seven")
+        Err(e) =>
+            match e
+                PasOutputTooSmall(want, have) =>
+                    test.assert_eq(want, 8)
+                    test.assert_eq(have, 7)
+                _                             => test.fail("the refusal should name both numbers")
+            test.assert_eq(c.pos(), 0)
+
+@test
+fn test_encode_into_and_encode_agree() [io]
+    test.case("one allocates and one does not, and that is the only difference")
+    let pieces = [bytes.from_str("Paragon"), bytes.from_str("Initiative")]
+    var c = bytes.cursor_le(bytes.zeros(paspae.encode_len(pieces)))
+    match paspae.encode_into(pieces, c)
+        Ok(n)  =>
+            match paspae.encode(pieces)
+                Ok(b)  =>
+                    test.assert_eq(n, bytes.len(b))
+                    test.assert_eq_str(bytes.to_hex(c.finish()), bytes.to_hex(b))
+                Err(_) => test.fail("the same pieces should encode")
+        Err(_) => test.fail("a correctly sized buffer was refused")

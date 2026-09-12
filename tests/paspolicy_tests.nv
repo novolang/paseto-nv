@@ -1,0 +1,181 @@
+// paspolicy_tests.nv — what a service accepts, and the claims and
+// clock it is checked against.
+//
+// RED ON PURPOSE: every assertion against a FUNCTION reaches
+// `not implemented: paseto-nv.<module>.<fn>`, because every body under
+// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
+// because a constant is not a stub.
+
+use std.test
+use paspolicy
+use pasclaims
+use paserr
+
+@test
+fn test_strict_accepts_nothing_until_somebody_has_written_down_what_it_accepts() [io]
+    test.case("the awkwardness is the point")
+    let p = paspolicy.strict()
+    test.assert(paspolicy.requires_expiration(p))
+    test.assert_eq_str(paspolicy.issuer(p), "")
+    test.assert_eq_str(paspolicy.audience(p), "")
+
+    test.case("and `check` refuses it at start-up, where the message can name the field")
+    match paspolicy.check(p)
+        Ok(_)  => test.fail("a policy that names no issuer refuses every token")
+        Err(e) =>
+            match e
+                PasPolicyUnusable(why) => test.assert(why != "")
+                _                      => test.fail("the refusal should name what is missing")
+
+    test.case("filled in, it is usable")
+    match paspolicy.check(paspolicy.requiring(p, "https://auth.example", "api"))
+        Ok(_)  => test.assert(true)
+        Err(_) => test.fail("a policy with an issuer and an audience is usable")
+
+@test
+fn test_there_is_no_algorithm_list_and_that_absence_is_the_format_s_advantage() [io]
+    test.case("a JWT policy must say which algorithms it accepts; a PASETO one has nothing to say")
+    // jwt-nv's `allowing(p, algs)` has no counterpart here, because a
+    // PASETO token's version and purpose are a fixed prefix and the KEY
+    // decides what can open it.  The test that this is true is that the
+    // policy is complete without it: `check` passes on a policy that
+    // named only an issuer and an audience.
+    match paspolicy.check(paspolicy.requiring(paspolicy.strict(), "iss", "aud"))
+        Ok(_)  => test.assert(true)
+        Err(_) => test.fail("a policy needs no algorithm list to be usable")
+
+@test
+fn test_relaxing_the_expiry_is_a_call_a_reviewer_sees_in_a_diff() [io]
+    test.case("a token with no expiry is valid forever")
+    let p = paspolicy.allowing_no_expiration(paspolicy.strict())
+    test.assert(paspolicy.requires_expiration(p) == false)
+    test.case("and the strict policy does not allow it")
+    test.assert(paspolicy.requires_expiration(paspolicy.strict()))
+
+@test
+fn test_the_other_three_requirements_are_opt_in() [io]
+    test.case("nbf, iat and sub are not required by default because most tokens do not carry them")
+    let p = paspolicy.strict()
+    test.assert(paspolicy.requires_not_before(p) == false)
+    test.assert(paspolicy.requires_issued_at(p) == false)
+    test.assert(paspolicy.requires_subject(p) == false)
+
+    test.assert(paspolicy.requires_not_before(paspolicy.requiring_not_before(p)))
+    test.assert(paspolicy.requires_issued_at(paspolicy.requiring_issued_at(p)))
+    test.assert(paspolicy.requires_subject(paspolicy.requiring_subject(p)))
+
+@test
+fn test_clock_skew_is_a_number_somebody_chose_and_not_a_default() [io]
+    test.case("zero, until somebody says otherwise")
+    test.assert_eq(paspolicy.leeway_seconds(paspolicy.strict()), 0)
+    test.case("because leeway that accepts a minute of skew accepts a minute of expired token")
+    test.assert_eq(paspolicy.leeway_seconds(paspolicy.with_leeway(paspolicy.strict(), 30)), 30)
+
+@test
+fn test_the_clock_is_a_parameter_so_a_test_needs_no_fake_one() [io]
+    test.case("an instant is seconds since the epoch, built by the caller")
+    test.assert_eq(pasclaims.unix_seconds(pasclaims.instant(1700000000)), 1700000000)
+    test.assert_eq(pasclaims.unix_seconds(pasclaims.instant(0)), 0)
+
+@test
+fn test_paseto_timestamps_are_rfc_3339_strings_and_not_numbers() [io]
+    test.case("this is the real difference from a JWT, and it costs calendar-nv")
+    match pasclaims.parse_timestamp("exp", "2039-01-01T00:00:00+00:00")
+        Ok(t)  => test.assert(pasclaims.unix_seconds(t) > 2000000000)
+        Err(_) => test.fail("the specification's own example timestamp should parse")
+
+    test.case("a number where a string belongs is a named refusal with the claim in it")
+    match pasclaims.parse_timestamp("exp", "1700000000")
+        Ok(_)  => test.fail("a bare integer is not an RFC 3339 timestamp")
+        Err(e) =>
+            match e
+                PasBadTimestamp(claim, _) => test.assert_eq_str(claim, "exp")
+                _                         => test.fail("the refusal should name the claim")
+
+    test.case("and the format writes +00:00 rather than Z, which is what the vectors compare against")
+    test.assert_eq_str(pasclaims.format_timestamp(pasclaims.instant(0)),
+                       "1970-01-01T00:00:00+00:00")
+
+@test
+fn test_the_claim_names_are_the_specification_s() [io]
+    test.case("the seven registered claims, spelled once")
+    test.assert_eq_str(pasclaims.PAS_CLAIM_ISSUER, "iss")
+    test.assert_eq_str(pasclaims.PAS_CLAIM_SUBJECT, "sub")
+    test.assert_eq_str(pasclaims.PAS_CLAIM_AUDIENCE, "aud")
+    test.assert_eq_str(pasclaims.PAS_CLAIM_EXPIRATION, "exp")
+    test.assert_eq_str(pasclaims.PAS_CLAIM_NOT_BEFORE, "nbf")
+    test.assert_eq_str(pasclaims.PAS_CLAIM_ISSUED_AT, "iat")
+    test.assert_eq_str(pasclaims.PAS_CLAIM_TOKEN_ID, "jti")
+
+@test
+fn test_the_two_error_predicates_split_an_alert_from_a_daily_event() [io]
+    test.case("a bad MAC is an attack; an expiry is a Tuesday")
+    test.assert(paserr.is_authentication_failure(PasBadMac))
+    test.assert(paserr.is_authentication_failure(PasBadSignature))
+    test.assert(paserr.is_authentication_failure(PasExpired(1000, 2000)) == false)
+
+    test.assert(paserr.is_policy_refusal(PasExpired(1000, 2000)))
+    test.assert(paserr.is_policy_refusal(PasNotYetValid(3000, 2000)))
+    test.assert(paserr.is_policy_refusal(PasClaimMissing("aud")))
+    test.assert(paserr.is_policy_refusal(PasClaimMismatch("aud", "api", "web")))
+    test.assert(paserr.is_policy_refusal(PasBadMac) == false)
+
+    test.case("and a malformed token is neither")
+    test.assert(paserr.is_authentication_failure(PasBadPartCount(2)) == false)
+    test.assert(paserr.is_policy_refusal(PasBadPartCount(2)) == false)
+
+@test
+fn test_every_refusal_says_something_a_log_can_print() [io]
+    test.assert(paserr.describe(PasUnknownPrefix("v2.local.")) != "")
+    test.assert(paserr.describe(PasBadPartCount(2)) != "")
+    test.assert(paserr.describe(PasBadBase64("payload", 7)) != "")
+    test.assert(paserr.describe(PasPayloadTooShort(30, 64)) != "")
+    test.assert(paserr.describe(PasKeyLengthWrong(16, 32)) != "")
+    test.assert(paserr.describe(PasPurposeMismatch("public", "local")) != "")
+    test.assert(paserr.describe(PasBadClaims("exp")) != "")
+    test.assert(paserr.describe(PasExpired(1000, 2000)) != "")
+    test.assert(paserr.describe(PasClaimMissing("aud")) != "")
+    test.assert(paserr.describe(PasPolicyUnusable("issuer")) != "")
+    test.assert(paserr.describe(PasOutputTooSmall(8, 7)) != "")
+    test.assert(paserr.describe(PasPaeTooLong(1)) != "")
+    test.case("and the two that carry nothing still have a sentence")
+    test.assert(paserr.describe(PasBadMac) != "")
+    test.assert(paserr.describe(PasBadSignature) != "")
+
+@test
+fn test_a_claims_payload_is_json_text_the_caller_decodes_itself() [io]
+    test.case("no JSON value type of this package's own — that would collide with serde-nv's")
+    match pasclaims.parse("{}")
+        Ok(c)  =>
+            test.assert_eq_str(pasclaims.payload_json(c), "{}")
+            test.assert_eq_str(pasclaims.issuer(c), "")
+            test.assert_eq_str(pasclaims.subject(c), "")
+            test.assert_eq_str(pasclaims.audience(c), "")
+            test.assert_eq_str(pasclaims.token_id(c), "")
+            test.assert_none(pasclaims.expiration(c))
+            test.assert_none(pasclaims.not_before(c))
+            test.assert_none(pasclaims.issued_at(c))
+        Err(_) => test.fail("an empty object is a valid claims payload")
+
+    test.case("a payload that is not an object is refused")
+    match pasclaims.parse("[]")
+        Ok(_)  => test.fail("an array is not a claims payload")
+        Err(_) => test.assert(true)
+
+@test
+fn test_the_footer_and_the_implicit_assertion_are_different_types_on_purpose() [io]
+    test.case("the footer travels in the token; the assertion never does")
+    test.assert(pasclaims.footer_is_empty(pasclaims.no_footer()))
+    test.assert(pasclaims.footer_is_empty(pasclaims.footer("x")) == false)
+    test.assert_eq_str(pasclaims.footer_text(pasclaims.footer("{\"kid\":\"k1\"}")),
+                       "{\"kid\":\"k1\"}")
+
+    test.assert(pasclaims.implicit_is_empty(pasclaims.no_implicit()))
+    test.assert(pasclaims.implicit_is_empty(pasclaims.implicit("t")) == false)
+    test.assert_eq_str(pasclaims.implicit_text(pasclaims.implicit("tenant-42")), "tenant-42")
+
+@test
+fn test_an_instant_can_be_shown_to_a_person_as_a_civil_date() [io]
+    test.case("calendar-nv's type, so it composes with the rest of its arithmetic")
+    let dt = pasclaims.civil_of(pasclaims.instant(0))
+    test.assert_eq_str(iso8601.format_datetime(dt), "1970-01-01T00:00:00")

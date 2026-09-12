@@ -1,0 +1,345 @@
+// paserk.nv — PASERK, the key serialisation that goes with PASETO.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// WHAT IT IS AND WHY IT IS NOT JWK.  A token format needs a way to
+// write a key down — in a config file, in a key store, in a `kid`
+// lookup table — and JWT's answer is JWK: a JSON object with a type
+// field, a curve field, an algorithm field and several optional ones,
+// which is the same "the data says what to do with it" mistake in a
+// different envelope.
+//
+// PASERK is a string with the type in front of it:
+//
+//     k4.local.<base64url of 32 bytes>
+//     k4.public.<base64url of 32 bytes>
+//     k4.secret.<base64url of 64 bytes>
+//
+// and the type is a CONSTANT a parser compares against, not a field it
+// reads.  A `k4.public.` string cannot be loaded as a local key
+// because the prefix is checked first and `PasPurposeMismatch` is the
+// answer.
+//
+// THE KEY IDENTIFIERS ARE ONE-WAY, and that is the part worth
+// understanding.  `k4.lid.`, `k4.pid.` and `k4.sid.` are BLAKE2b
+// hashes of the corresponding serialised key, truncated to 33 bytes.
+// So a `kid` in a token's footer names a key without revealing it —
+// a local key's identifier can sit in a log where the key itself could
+// not — and two parties can agree on which key they mean without
+// either sending it.  `local_id` takes a key and answers an
+// identifier; there is no function the other way and there cannot be.
+//
+// **BLAKE2b IS THE SAME MISSING ROW `pasetoken` NAMES**: `blake2-nv`,
+// `crypto` / `core`. The identifiers cannot be computed without it, and
+// this is the second place in one package that needs it — the third
+// place on the grid, counting argon2-nv's note.
+//
+// WHAT IS OUTSIDE, and named rather than silently absent.  PASERK has
+// a second tier of types that WRAP a key: `k4.local-wrap.pie.`,
+// `k4.seal.`, `k4.local-pw.` and `k4.secret-pw.`.  They are key
+// encryption — a local key sealed to a public key, a secret key
+// encrypted under a password — and each is a construction with its own
+// test vectors and its own failure modes.  They belong here
+// eventually; they are not in 0.0.1 because the password ones need the
+// scrypt-shaped derivation the grid does not have either, and shipping
+// half of a wrapping tier is worse than shipping none of it.  The
+// README says so where a reader deciding what to depend on will see it.
+
+use std.bytes
+use paskey
+
+// ── The type prefixes ────────────────────────────────────────────────
+
+// `k4.local.` — a symmetric key.
+pub const PASERK_LOCAL = "k4.local."
+
+// `k4.public.` — an Ed25519 public key.
+pub const PASERK_PUBLIC = "k4.public."
+
+// `k4.secret.` — an Ed25519 secret key, as the 64-byte seed-and-public
+// concatenation Ed25519 implementations conventionally call a secret
+// key.
+pub const PASERK_SECRET = "k4.secret."
+
+// `k4.lid.` — a local key's identifier.
+pub const PASERK_LOCAL_ID = "k4.lid."
+
+// `k4.pid.` — a public key's identifier.
+pub const PASERK_PUBLIC_ID = "k4.pid."
+
+// `k4.sid.` — a secret key's identifier.
+pub const PASERK_SECRET_ID = "k4.sid."
+
+// A key identifier's bytes before encoding: thirty-three.
+//
+// Thirty-three and not thirty-two, which looks like a typo and is not:
+// PASERK specifies a 33-byte truncation of the BLAKE2b hash, chosen so
+// that the base64url encoding is a whole number of characters with no
+// padding and no partial group.  A port that truncated to 32 produces
+// identifiers that are the right shape and disagree with everybody.
+pub const PASERK_ID_BYTES = 33
+
+// ── What a PASERK string is ──────────────────────────────────────────
+
+// Which of the six types a PASERK string is.
+//
+// An enum rather than a string comparison at every call site, and the
+// arms are prefixed because a variant is constructed by name across
+// the whole assembly.
+//
+// ```novo
+// use paserk
+//
+// fn main() [io]
+//     println(paserk.type_prefix(PaserkLocal))    // k4.local.
+// ```
+pub enum PaserkType
+    // `k4.local.` — a symmetric key, which is SECRET.
+    PaserkLocal
+    // `k4.public.` — a verifying key, which is not.
+    PaserkPublic
+    // `k4.secret.` — a signing key, which is SECRET.
+    PaserkSecret
+    // `k4.lid.` — a local key's identifier, safe to log.
+    PaserkLocalId
+    // `k4.pid.` — a public key's identifier.
+    PaserkPublicId
+    // `k4.sid.` — a secret key's identifier, safe to log even though
+    // the key it names is not.
+    PaserkSecretId
+
+// The prefix a type is written with.
+//
+// ```novo
+// use paserk
+//
+// fn main() [io]
+//     println(paserk.type_prefix(PaserkSecretId))   // k4.sid.
+// ```
+pub fn type_prefix(t: PaserkType) -> Str []
+    todo("paseto-nv.paserk.type_prefix")
+
+// The type a PASERK string begins with, or the refusal.
+//
+// ```novo
+// use paserk
+//
+// fn main() [io]
+//     match paserk.type_of("k4.local.abc")
+//         Ok(_)  => println("a local key")
+//         Err(_) => println("not a PASERK string this package reads")
+// ```
+pub fn type_of(s: Str) -> Result<PaserkType, PasError> []
+    todo("paseto-nv.paserk.type_of")
+
+// Whether a type names a SECRET: `PaserkLocal` and `PaserkSecret`.
+//
+// The predicate a config loader and a log redactor both want, and the
+// reason it is here rather than in either: there should be one
+// statement of which PASERK strings must never be printed.
+//
+// ```novo
+// use paserk
+//
+// fn main() [io]
+//     println("${paserk.is_secret(PaserkLocal)}")     // true
+//     println("${paserk.is_secret(PaserkLocalId)}")   // false
+// ```
+pub fn is_secret(t: PaserkType) -> Bool []
+    todo("paseto-nv.paserk.is_secret")
+
+// ── Keys, written down ───────────────────────────────────────────────
+
+// A local key as `k4.local.<base64url>`.
+//
+// ```novo
+// use std.bytes
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.local_key(bytes.zeros(32))
+//         Ok(k)  => println(paserk.local_to_string(k))
+//         Err(_) => println("not 32 bytes")
+// ```
+pub fn local_to_string(k: PasLocalKey) -> Str []
+    todo("paseto-nv.paserk.local_to_string")
+
+// The local key a `k4.local.` string names.
+//
+// Refuses any other prefix by name, so a `k4.public.` string loaded
+// into a local key slot is `PasPurposeMismatch` and not a length
+// error a reader has to interpret.
+//
+// ```novo
+// use paserk
+//
+// fn main() [io]
+//     match paserk.local_from_string("k4.local.abc")
+//         Ok(_)  => println("a local key")
+//         Err(_) => println("not a local key string")
+// ```
+pub fn local_from_string(s: Str) -> Result<PasLocalKey, PasError> []
+    todo("paseto-nv.paserk.local_from_string")
+
+// A public key as `k4.public.<base64url>`.
+//
+// ```novo
+// use std.list
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.public_key(list.zeros(32))
+//         Ok(k)  => println(paserk.public_to_string(k))
+//         Err(_) => println("not a point")
+// ```
+pub fn public_to_string(k: PasPublicKey) -> Str []
+    todo("paseto-nv.paserk.public_to_string")
+
+// The public key a `k4.public.` string names.
+//
+// ```novo
+// use paserk
+//
+// fn main() [io]
+//     match paserk.public_from_string("k4.public.abc")
+//         Ok(_)  => println("a public key")
+//         Err(_) => println("not a public key string")
+// ```
+pub fn public_from_string(s: Str) -> Result<PasPublicKey, PasError> []
+    todo("paseto-nv.paserk.public_from_string")
+
+// A secret key as `k4.secret.<base64url>`.
+//
+// SIXTY-FOUR BYTES, not thirty-two: the seed followed by the public
+// key, which is what Ed25519 implementations conventionally call a
+// secret key and what PASERK specifies.  ed25519-nv's own type holds
+// the 32-byte SEED, so this function is where the two conventions
+// meet, and it is the one place in the package where a length surprise
+// is likely.
+//
+// ```novo
+// use std.list
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.secret_key(list.zeros(32))
+//         Ok(k)  => println(paserk.secret_to_string(k))
+//         Err(_) => println("not a seed")
+// ```
+pub fn secret_to_string(k: PasSecretKey) -> Str []
+    todo("paseto-nv.paserk.secret_to_string")
+
+// The secret key a `k4.secret.` string names.
+//
+// Checks that the trailing 32 bytes ARE the public key the leading 32
+// derive, rather than trusting them.  A mismatched pair is a key file
+// that was edited or corrupted, and accepting it would produce a
+// signer whose tokens nobody can verify — discovered in production
+// rather than at load.
+//
+// ```novo
+// use paserk
+//
+// fn main() [io]
+//     match paserk.secret_from_string("k4.secret.abc")
+//         Ok(_)  => println("a secret key")
+//         Err(_) => println("not a secret key string")
+// ```
+pub fn secret_from_string(s: Str) -> Result<PasSecretKey, PasError> []
+    todo("paseto-nv.paserk.secret_from_string")
+
+// ── Identifiers ──────────────────────────────────────────────────────
+
+// A local key's identifier, `k4.lid.<base64url>`.
+//
+// ONE-WAY.  It is a BLAKE2b hash of the serialised key, so it names
+// the key without revealing it — which is what makes it the right
+// thing to put in a token's footer as a `kid` and in a log line beside
+// a rejection.  There is no function from an identifier back to a key
+// and there cannot be.
+//
+// ```novo
+// use std.bytes
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.local_key(bytes.zeros(32))
+//         Ok(k)  => println(paserk.local_id(k))
+//         Err(_) => println("not 32 bytes")
+// ```
+pub fn local_id(k: PasLocalKey) -> Str []
+    todo("paseto-nv.paserk.local_id")
+
+// A public key's identifier, `k4.pid.<base64url>`.
+//
+// ```novo
+// use std.list
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.public_key(list.zeros(32))
+//         Ok(k)  => println(paserk.public_id(k))
+//         Err(_) => println("not a point")
+// ```
+pub fn public_id(k: PasPublicKey) -> Str []
+    todo("paseto-nv.paserk.public_id")
+
+// A secret key's identifier, `k4.sid.<base64url>`.
+//
+// Safe to log even though the key is not — which is the whole reason
+// the identifier types exist.
+//
+// ```novo
+// use std.list
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.secret_key(list.zeros(32))
+//         Ok(k)  => println(paserk.secret_id(k))
+//         Err(_) => println("not a seed")
+// ```
+pub fn secret_id(k: PasSecretKey) -> Str []
+    todo("paseto-nv.paserk.secret_id")
+
+// Whether a PASERK identifier string names this local key.
+//
+// The `kid` lookup, as a comparison rather than a map: a service with
+// three keys checks each, and one with more has a cache, which is a
+// `host` package's job.  The comparison is constant time, because an
+// identifier is derived from a secret even though it does not reveal
+// one.
+//
+// ```novo
+// use std.bytes
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.local_key(bytes.zeros(32))
+//         Ok(k)  => println("${paserk.local_id_matches(k, "k4.lid.abc")}")
+//         Err(_) => println("not 32 bytes")
+// ```
+pub fn local_id_matches(k: PasLocalKey, id: Str) -> Bool []
+    todo("paseto-nv.paserk.local_id_matches")
+
+// Whether a PASERK identifier string names this public key.
+//
+// ```novo
+// use std.list
+// use paskey
+// use paserk
+//
+// fn main() [io]
+//     match paskey.public_key(list.zeros(32))
+//         Ok(k)  => println("${paserk.public_id_matches(k, "k4.pid.abc")}")
+//         Err(_) => println("not a point")
+// ```
+pub fn public_id_matches(k: PasPublicKey, id: Str) -> Bool []
+    todo("paseto-nv.paserk.public_id_matches")
