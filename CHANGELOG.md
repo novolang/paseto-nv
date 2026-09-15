@@ -5,6 +5,10 @@ All notable changes to paseto-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.0.2 — 2026-09-15
+
+README rewritten to the package README style guide (docs/writing-a-readme.md); no change to the interface.
+
 ## 0.0.1 — 2026-09-11
 
 The **interface**: every signature and every effect row, and no bodies.
@@ -54,3 +58,20 @@ The **interface**: every signature and every effect row, and no bodies.
 - v1, v2 and v3, and PASERK's wrapping tier, are named as outside with
   the reason in each case.
 - No device claim and no probe.
+
+### Design notes
+
+Two statements in the 0.0.1 README have gone stale and are recorded
+here rather than repeated on the page. It said chacha20-nv was a path
+dependency that had to become a registry range before publish; the
+manifest has carried `chacha20-nv = "^0.0.1"` since that release. It
+also said nothing on the registry published BLAKE2b and proposed
+`blake2-nv` as a new row; blake2-nv 0.0.2 is now published, as an
+interface. The module headers of `pasetoken` and `paserk` still say the
+row is missing, and they are left alone because this release changes no
+source.
+
+PASETO exists beside jwt-nv because every classic JWT vulnerability
+follows from one decision: the token tells the verifier which algorithm
+to use, in a header the attacker also controls. jwt-nv closes each of
+them by construction. PASETO removes the question instead.
