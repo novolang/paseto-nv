@@ -233,9 +233,10 @@ package calls, and each of those packages states its own behaviour.
   nonce is the caller's.
 - **A clock.** See rule 6.
 - **A build for a microcontroller.** The surface is strings, byte
-  buffers and lists of claims, so this package makes no device claim.
+  buffers and lists of claims, so this package does not build for a
+  microcontroller with no heap allocator.
   [chacha20-nv](https://novo-lang.org/packages/chacha20-nv) underneath
-  does make one.
+  does.
 
 ## What is still missing underneath
 
