@@ -1,6 +1,6 @@
 [package]
 name        = "paseto-nv"
-version     = "0.0.2"
+version     = "0.0.3"
 description = "PASETO v4 — local over XChaCha20 with a BLAKE2b MAC, public over Ed25519 — and PASERK key serialisation, with the unverified state unusable by construction: decoding hands back a token whose claims cannot be read until a key and a policy have produced a verified one.  There is no algorithm field to confuse, because the version and the purpose are a fixed prefix and the key carries its own purpose.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 
@@ -63,9 +63,9 @@ ed25519-nv = "^0.0.1"
 # optional here the way it is there — and `CivilDateTime` is
 # calendar-nv's type, so a caller comparing a claim against its own
 # clock is comparing two values of one type.
-calendar-nv = "^0.0.2"
+calendar-nv = "^0.2.0"
 
 # base64-nv encodes every part of a token.  PASETO is base64url
 # UNPADDED throughout, which is one of base64-nv's four combinations
 # and the one it named JWT for.
-base64-nv = "^0.0.1"
+base64-nv = "^0.1.1"
