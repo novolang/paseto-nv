@@ -86,7 +86,7 @@ pub fn encode_len(pieces: [Bytes]) -> Int []
 //         Ok(n)  => println("${n}")               // 8
 //         Err(_) => println("refused")
 // ```
-pub fn encode_into(pieces: [Bytes], mut dst: Cursor) -> Result<Int, PasError> []
+pub fn encode_into(pieces: [Bytes], var dst: Cursor) -> Result<Int, PasError> []
     todo("paseto-nv.paspae.encode_into")
 
 // The pre-authentication encoding of `pieces`, in a buffer of its own.
