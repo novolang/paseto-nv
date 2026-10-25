@@ -58,6 +58,7 @@ use std.bytes
 use paskey
 use pasclaims
 use paspolicy
+use paserr
 
 // ── The two token types ──────────────────────────────────────────────
 

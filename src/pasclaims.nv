@@ -34,6 +34,8 @@
 // ── The registered claim names ───────────────────────────────────────
 
 // `iss` — who issued the token.
+use paserr
+
 pub const PAS_CLAIM_ISSUER = "iss"
 
 // `sub` — who the token is about.

@@ -38,6 +38,7 @@
 // is a second version arm and two new rows, not a flag.
 
 use ed25519
+use paserr
 
 // ── Sizes ────────────────────────────────────────────────────────────
 

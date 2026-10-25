@@ -42,6 +42,8 @@
 // fn main() [io]
 //     println("${paspolicy.leeway_seconds(paspolicy.strict())}")   // 0
 // ```
+use paserr
+
 pub struct PasPolicy
     // The issuer a token must name, or `""` for "not yet decided",
     // which `check` refuses.

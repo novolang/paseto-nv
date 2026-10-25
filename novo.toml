@@ -1,6 +1,6 @@
 [package]
 name        = "paseto-nv"
-version     = "0.0.3"
+version     = "0.0.4"
 description = "PASETO v4 — local over XChaCha20 with a BLAKE2b MAC, public over Ed25519 — and PASERK key serialisation, with the unverified state unusable by construction: decoding hands back a token whose claims cannot be read until a key and a policy have produced a verified one.  There is no algorithm field to confuse, because the version and the purpose are a fixed prefix and the key carries its own purpose.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 
@@ -29,7 +29,7 @@ category    = "web"
 tags        = ["paseto", "paserk", "token", "auth", "v4", "xchacha20", "ed25519", "web"]
 repository  = "https://github.com/novolang/paseto-nv"
 maintainers = ["novo-lang"]
-novo        = ">= 0.8.9"
+novo        = ">= 0.21.1"
 
 # A library: no `main`, so `novo pkg build` type-checks and
 # effect-checks every module under `src/` and writes no binary.

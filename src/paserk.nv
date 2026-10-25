@@ -48,6 +48,7 @@
 
 use std.bytes
 use paskey
+use paserr
 
 // ── The type prefixes ────────────────────────────────────────────────
 
