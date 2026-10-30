@@ -1,10 +1,7 @@
 // pasclaims.nv — the claims, the footer, the implicit assertion, and
 // the instant a caller supplies.
 //
-// Every body is a `todo()`.  The signatures are the design, and the
-// compiler checks them as claims; see the README for the stamp.
-//
-// THE CLOCK IS A PARAMETER.  Validating a token needs the current time
+// The clock is a parameter.  Validating a token needs the current time
 // and this is a `core` package, so `PasInstant` arrives as an argument
 // — jwt-nv's `JwtInstant` under this package's name, and the same shape
 // `sql-engine-nv` takes with `NowSnapshot`.  The `[time]` is spent once
@@ -14,7 +11,7 @@
 // than only *"is it valid now"*, and a replay of a request log gets the
 // same answers it got the first time.
 //
-// PASETO'S TIMESTAMPS ARE RFC 3339 STRINGS, not JWT's numeric seconds.
+// PASETO's timestamps are RFC 3339 strings, not JWT's numeric seconds.
 // That is a real difference and it costs a dependency: `exp`, `nbf` and
 // `iat` are `"2039-01-01T00:00:00+00:00"`, so this package parses and
 // formats them with calendar-nv rather than reading an integer.  The
@@ -23,19 +20,58 @@
 // malformed timestamp is a new failure mode, which is why
 // `PasBadTimestamp` names the claim and the offset.
 //
-// THE CLAIMS ARE JSON TEXT, NOT A VALUE TYPE OF THIS PACKAGE'S.
+// The claims are JSON text, not a value type of this package's.
 // `PasClaims` holds the registered claims it understands as fields and
 // the whole payload as JSON text beside them, because a claims type of
 // this package's own would declare a JSON value type that collides
-// with serde-nv's — public type identity is by NAME across the whole
+// with serde-nv's — public type identity is by name across the whole
 // assembly — and would force every consumer through a second decoder.
 // jwt-nv made the same call for the same reason and its README says so.
+
+use std.json
+use civil
+use iso8601
+use calerror
+use paserr
+
+// The text of a string claim, "" when the claim is absent, and a
+// refusal when it is present and is not a string.
+fn claim_text(v: JsonValueH, name: Str) -> Result<Str, PasError> []
+    match json.get(v, name)
+        None    => Ok("")
+        Some(h) =>
+            match json.to_str(h)
+                Some(s) => Ok(s)
+                None    => Err(PasBadClaims(name))
+
+// The seconds an RFC 3339 claim names, `None` when the claim is
+// absent, and a refusal when it is present and is not such a string.
+fn claim_time(v: JsonValueH, name: Str) -> Result<?Int, PasError> []
+    match json.get(v, name)
+        None    => Ok(None)
+        Some(h) =>
+            match json.to_str(h)
+                None    => Err(PasBadClaims(name))
+                Some(s) =>
+                    match parse_timestamp(name, s)
+                        Ok(t)  => Ok(Some(t.seconds))
+                        Err(e) => Err(e)
+
+// The claims of a payload already known to be a JSON object.
+fn parse_object(text: Str, v: JsonValueH) -> Result<PasClaims, PasError> []
+    let iss = claim_text(v, PAS_CLAIM_ISSUER)!
+    let sub = claim_text(v, PAS_CLAIM_SUBJECT)!
+    let aud = claim_text(v, PAS_CLAIM_AUDIENCE)!
+    let jti = claim_text(v, PAS_CLAIM_TOKEN_ID)!
+    let exp = claim_time(v, PAS_CLAIM_EXPIRATION)!
+    let nbf = claim_time(v, PAS_CLAIM_NOT_BEFORE)!
+    let iat = claim_time(v, PAS_CLAIM_ISSUED_AT)!
+    Ok(PasClaims { json: text, issuer: iss, subject: sub, audience: aud, token_id: jti,
+                   expiration: exp, not_before: nbf, issued_at: iat })
 
 // ── The registered claim names ───────────────────────────────────────
 
 // `iss` — who issued the token.
-use paserr
-
 pub const PAS_CLAIM_ISSUER = "iss"
 
 // `sub` — who the token is about.
@@ -83,7 +119,7 @@ pub struct PasInstant
 //     println("${pasclaims.unix_seconds(pasclaims.instant(0))}")   // 0
 // ```
 pub fn instant(seconds: Int) -> PasInstant []
-    todo("paseto-nv.pasclaims.instant")
+    PasInstant { seconds: seconds }
 
 // The seconds an instant holds.
 //
@@ -94,7 +130,7 @@ pub fn instant(seconds: Int) -> PasInstant []
 //     println("${pasclaims.unix_seconds(pasclaims.instant(42))}")  // 42
 // ```
 pub fn unix_seconds(t: PasInstant) -> Int []
-    todo("paseto-nv.pasclaims.unix_seconds")
+    t.seconds
 
 // The instant an RFC 3339 timestamp names.
 //
@@ -111,7 +147,13 @@ pub fn unix_seconds(t: PasInstant) -> Int []
 //         Err(_) => println("not a timestamp")
 // ```
 pub fn parse_timestamp(claim: Str, s: Str) -> Result<PasInstant, PasError> []
-    todo("paseto-nv.pasclaims.parse_timestamp")
+    match iso8601.parse_rfc3339(s)
+        Err(e)     => Err(PasBadTimestamp(claim, calerror.offset_of(e)))
+        Ok(parsed) =>
+            let dt = parsed.0
+            let day = civil.epoch_day(dt.date)
+            let secs = day * 86400 + dt.time.hour * 3600 + dt.time.minute * 60 + dt.time.second
+            Ok(PasInstant { seconds: secs - parsed.1 * 60 })
 
 // An instant as the RFC 3339 string a token carries, in UTC.
 //
@@ -130,7 +172,7 @@ pub fn parse_timestamp(claim: Str, s: Str) -> Result<PasInstant, PasError> []
 //     // 1970-01-01T00:00:00+00:00
 // ```
 pub fn format_timestamp(t: PasInstant) -> Str []
-    todo("paseto-nv.pasclaims.format_timestamp")
+    iso8601.format_datetime(civil_of(t)) + "+00:00"
 
 // The civil date and time an instant falls on, in UTC, as
 // calendar-nv's type.
@@ -147,7 +189,13 @@ pub fn format_timestamp(t: PasInstant) -> Str []
 //     println(iso8601.format_datetime(pasclaims.civil_of(pasclaims.instant(0))))
 // ```
 pub fn civil_of(t: PasInstant) -> CivilDateTime []
-    todo("paseto-nv.pasclaims.civil_of")
+    var days = t.seconds / 86400
+    var rem = t.seconds - days * 86400
+    if rem < 0
+        days = days - 1
+        rem = rem + 86400
+    let clock = CivilTime { hour: rem / 3600, minute: rem % 3600 / 60, second: rem % 60, nano: 0 }
+    civil.datetime(civil.date_from_epoch_day(days), clock)
 
 // ── The claims ───────────────────────────────────────────────────────
 
@@ -188,7 +236,7 @@ pub struct PasClaims
 // Refuses a payload that is not a JSON object, and a registered claim
 // that is not the type the specification gives it — `exp` that is a
 // number rather than a string, `aud` that is an object.  An
-// UNREGISTERED claim of any shape is left alone: the payload is the
+// unregistered claim of any shape is left alone: the payload is the
 // caller's and this package validates only what it is responsible for.
 //
 // ```novo
@@ -199,13 +247,19 @@ pub struct PasClaims
 //         Ok(c)  => println(pasclaims.subject(c))
 //         Err(_) => println("not a claims object")
 // ```
-pub fn parse(json: Str) -> Result<PasClaims, PasError> []
-    todo("paseto-nv.pasclaims.parse")
+pub fn parse(text: Str) -> Result<PasClaims, PasError> []
+    match json.parse(text)
+        None    => Err(PasBadClaims("payload"))
+        Some(v) =>
+            if json.type_of(v) != "object"
+                Err(PasBadClaims("payload"))
+            else
+                parse_object(text, v)
 
 // The payload as JSON text.
 //
 // What a caller hands to its own decoder to read claims this package
-// does not know about.  It is the AUTHENTICATED bytes, not a
+// does not know about.  It is the authenticated bytes, not a
 // re-serialisation, so a signature check covers exactly this string.
 //
 // ```novo
@@ -217,7 +271,7 @@ pub fn parse(json: Str) -> Result<PasClaims, PasError> []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn payload_json(c: PasClaims) -> Str []
-    todo("paseto-nv.pasclaims.payload_json")
+    c.json
 
 // `iss`, or `""`.
 //
@@ -230,7 +284,7 @@ pub fn payload_json(c: PasClaims) -> Str []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn issuer(c: PasClaims) -> Str []
-    todo("paseto-nv.pasclaims.issuer")
+    c.issuer
 
 // `sub`, or `""`.
 //
@@ -243,7 +297,7 @@ pub fn issuer(c: PasClaims) -> Str []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn subject(c: PasClaims) -> Str []
-    todo("paseto-nv.pasclaims.subject")
+    c.subject
 
 // `aud`, or `""`.
 //
@@ -256,7 +310,7 @@ pub fn subject(c: PasClaims) -> Str []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn audience(c: PasClaims) -> Str []
-    todo("paseto-nv.pasclaims.audience")
+    c.audience
 
 // `jti`, or `""`.
 //
@@ -269,7 +323,7 @@ pub fn audience(c: PasClaims) -> Str []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn token_id(c: PasClaims) -> Str []
-    todo("paseto-nv.pasclaims.token_id")
+    c.token_id
 
 // `exp` as an instant, or `None` when the claim is absent.
 //
@@ -285,7 +339,9 @@ pub fn token_id(c: PasClaims) -> Str []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn expiration(c: PasClaims) -> ?PasInstant []
-    todo("paseto-nv.pasclaims.expiration")
+    match c.expiration
+        Some(s) => Some(PasInstant { seconds: s })
+        None    => None
 
 // `nbf` as an instant, or `None`.
 //
@@ -301,7 +357,9 @@ pub fn expiration(c: PasClaims) -> ?PasInstant []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn not_before(c: PasClaims) -> ?PasInstant []
-    todo("paseto-nv.pasclaims.not_before")
+    match c.not_before
+        Some(s) => Some(PasInstant { seconds: s })
+        None    => None
 
 // `iat` as an instant, or `None`.
 //
@@ -317,17 +375,19 @@ pub fn not_before(c: PasClaims) -> ?PasInstant []
 //         Err(_) => println("not a claims object")
 // ```
 pub fn issued_at(c: PasClaims) -> ?PasInstant []
-    todo("paseto-nv.pasclaims.issued_at")
+    match c.issued_at
+        Some(s) => Some(PasInstant { seconds: s })
+        None    => None
 
 // ── The footer and the implicit assertion ────────────────────────────
 
-// A token's footer: authenticated, NOT encrypted, and visible to
+// A token's footer: authenticated, not encrypted, and visible to
 // anyone holding the token.
 //
 // It is the right place for a key identifier — `{"kid":"..."}` — which
 // is what a verifier needs before it can choose a key, and therefore
 // the one thing that cannot be inside the encrypted part.  It is the
-// WRONG place for anything secret, and that sentence is why this type
+// wrong place for anything secret, and that sentence is why this type
 // exists rather than a bare `Str`: a `PasFooter` in a signature is a
 // reminder at every call site.
 //
@@ -350,7 +410,7 @@ pub struct PasFooter
 //     println("${pasclaims.footer_is_empty(pasclaims.footer(""))}")   // true
 // ```
 pub fn footer(text: Str) -> PasFooter []
-    todo("paseto-nv.pasclaims.footer")
+    PasFooter { text: text }
 
 // The empty footer, for a token that has none.
 //
@@ -361,7 +421,7 @@ pub fn footer(text: Str) -> PasFooter []
 //     println("${pasclaims.footer_is_empty(pasclaims.no_footer())}")  // true
 // ```
 pub fn no_footer() -> PasFooter []
-    todo("paseto-nv.pasclaims.no_footer")
+    PasFooter { text: "" }
 
 // The footer's text.
 //
@@ -372,7 +432,7 @@ pub fn no_footer() -> PasFooter []
 //     println(pasclaims.footer_text(pasclaims.footer("x")))   // x
 // ```
 pub fn footer_text(f: PasFooter) -> Str []
-    todo("paseto-nv.pasclaims.footer_text")
+    f.text
 
 // Whether the footer is empty.
 //
@@ -383,10 +443,10 @@ pub fn footer_text(f: PasFooter) -> Str []
 //     println("${pasclaims.footer_is_empty(pasclaims.footer("x"))}")  // false
 // ```
 pub fn footer_is_empty(f: PasFooter) -> Bool []
-    todo("paseto-nv.pasclaims.footer_is_empty")
+    f.text == ""
 
-// An implicit assertion: authenticated, and NEVER WRITTEN INTO THE
-// TOKEN.
+// An implicit assertion: authenticated, and never written into the
+// token.
 //
 // The addition v3 and v4 have that v1 and v2 did not, and the one
 // feature of PASETO with no JWT counterpart at all.  It binds a token
@@ -420,7 +480,7 @@ pub struct PasImplicit
 //     println("${pasclaims.implicit_is_empty(pasclaims.implicit("t"))}")   // false
 // ```
 pub fn implicit(text: Str) -> PasImplicit []
-    todo("paseto-nv.pasclaims.implicit")
+    PasImplicit { text: text }
 
 // No implicit assertion.
 //
@@ -431,7 +491,7 @@ pub fn implicit(text: Str) -> PasImplicit []
 //     println("${pasclaims.implicit_is_empty(pasclaims.no_implicit())}")   // true
 // ```
 pub fn no_implicit() -> PasImplicit []
-    todo("paseto-nv.pasclaims.no_implicit")
+    PasImplicit { text: "" }
 
 // The assertion's text.
 //
@@ -442,7 +502,7 @@ pub fn no_implicit() -> PasImplicit []
 //     println(pasclaims.implicit_text(pasclaims.implicit("t")))   // t
 // ```
 pub fn implicit_text(i: PasImplicit) -> Str []
-    todo("paseto-nv.pasclaims.implicit_text")
+    i.text
 
 // Whether there is no implicit assertion.
 //
@@ -453,4 +513,4 @@ pub fn implicit_text(i: PasImplicit) -> Str []
 //     println("${pasclaims.implicit_is_empty(pasclaims.no_implicit())}")   // true
 // ```
 pub fn implicit_is_empty(i: PasImplicit) -> Bool []
-    todo("paseto-nv.pasclaims.implicit_is_empty")
+    i.text == ""

@@ -1,10 +1,6 @@
 // paserk_tests.nv — the keys written down, and the identifiers that
 // name them without revealing them.
 //
-// RED ON PURPOSE: every assertion against a FUNCTION reaches
-// `not implemented: paseto-nv.<module>.<fn>`, because every body under
-// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
-// because a constant is not a stub.
 
 use std.bytes
 use std.list
@@ -40,7 +36,7 @@ fn test_a_public_key_string_cannot_be_loaded_as_a_local_key() [io]
 fn test_an_unknown_paserk_type_is_named_rather_than_called_malformed() [io]
     test.case("`k4.local-wrap.pie.` is real PASERK and is outside this package")
     match paserk.type_of("k4.local-wrap.pie.abc")
-        Ok(_)  => test.fail("the wrapping tier is not in 0.0.1")
+        Ok(_)  => test.fail("the wrapping tier is not in this package")
         Err(e) =>
             match e
                 PasUnknownPaserkType(got) => test.assert(got != "")
@@ -48,7 +44,7 @@ fn test_an_unknown_paserk_type_is_named_rather_than_called_malformed() [io]
 
     test.case("and so is `k4.seal.`")
     match paserk.type_of("k4.seal.abc")
-        Ok(_)  => test.fail("the sealing tier is not in 0.0.1")
+        Ok(_)  => test.fail("the sealing tier is not in this package")
         Err(_) => test.assert(true)
 
 @test

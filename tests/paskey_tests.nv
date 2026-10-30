@@ -1,10 +1,6 @@
 // paskey_tests.nv — the prefix that replaces an algorithm field, the
 // key pair's two halves, and the verified token's two readers.
 //
-// RED ON PURPOSE: every assertion against a FUNCTION reaches
-// `not implemented: paseto-nv.<module>.<fn>`, because every body under
-// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
-// because a constant is not a stub.
 
 use std.bytes
 use std.list
@@ -40,13 +36,13 @@ fn test_a_prefix_parses_back_to_the_version_and_purpose_it_names() [io]
 
     test.case("and a version this package does not do is refused rather than guessed at")
     match paskey.parse_prefix("v3.local.abcdefgh")
-        Ok(_)  => test.fail("v3 needs P-384 and AES, neither of which is on the grid")
+        Ok(_)  => test.fail("v3 needs P-384 and AES, neither of which this package has")
         Err(_) => test.assert(true)
 
 @test
 fn test_a_decoded_token_reports_its_own_version_and_purpose() [io]
     test.case("read off the prefix, never out of a field")
-    match pasetoken.decode("v4.local.abcdefghijklmnopqrstuvwxyz0123456789")
+    match pasetoken.decode("v4.local.abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghij")
         Ok(t)  =>
             test.assert_eq_str(paskey.purpose_name(pasetoken.purpose_of(t)), "local")
             test.assert_eq_str(paskey.version_name(pasetoken.version_of(t)), "v4")
@@ -57,7 +53,7 @@ fn test_claims_and_footer_are_read_off_a_verified_token_and_nothing_else() [io]
     test.case("`claims_of` and `footer_of` take a VerifiedPaseto, which only verify and decrypt produce")
     match paskey.local_key(bytes.zeros(32))
         Ok(k)  =>
-            match pasetoken.decode("v4.local.abcdefghijklmnopqrstuvwxyz0123456789")
+            match pasetoken.decode("v4.local.abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghij")
                 Ok(t)  =>
                     match pasetoken.decrypt(t, k, paspolicy.strict(),
                                             pasclaims.no_implicit(), pasclaims.instant(0))

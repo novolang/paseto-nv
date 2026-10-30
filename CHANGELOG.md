@@ -5,6 +5,59 @@ All notable changes to paseto-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.1.0 — 2026-10-30
+
+PASETO v4 `local` and `public`, and PASERK keys and identifiers.
+`stability = "experimental"` and the toolchain floor is `novo >= 0.22.0`.
+
+### Added
+
+- `pasetoken`: `decode`, `decrypt`, `verify`, `encrypt`, `sign`, `pre_auth`
+  and the readers of an unverified and a verified token. `v4.local` is
+  XChaCha20 under keys split from the key and the nonce with keyed BLAKE2b,
+  and a keyed BLAKE2b tag over the pre-authentication encoding. `v4.public`
+  is Ed25519 at `EdStrict`.
+- `paspae`, `paskey`, `pasclaims`, `paspolicy`, `paserk` and `paserr`: the
+  bodies of the interface of 0.0.4.
+- The policy is applied inside `decrypt` and `verify`, after the MAC or the
+  signature has passed, in this order: the policy is usable, the payload is a
+  claims object, the issuer, the audience, `exp`, `nbf`, then the required
+  `iat` and `sub`. A token is expired when the instant is at or past `exp`
+  plus the leeway, and not yet valid when the instant plus the leeway is
+  before `nbf`.
+- Dependencies: blake2-nv `^0.1`, chacha20-nv `^0.1`, ed25519-nv `^0.1`,
+  crypto-nv `^0.1.7` (for `digest.ct_eq`), calendar-nv `^0.2.0` and
+  base64-nv `^0.1.1`.
+- Tests: the vectors of `paspae`, tokens and PASERK strings from a reference in
+  `tests/vectors/paseto_ref.py`, the published token of PASETO test vector
+  4-S-1, and `tests/paseto_edge_tests.nv`.
+
+### Changed
+
+- The parameter of `pasclaims.parse` is named `text`, not `json`, because a
+  parameter named `json` hides the standard `json` module inside the function.
+  A call passes it by position and is unaffected.
+- `pasclaims.format_timestamp` writes `+00:00`, as documented, and not `Z`.
+- `pasetoken.encrypt` refuses a nonce that is not 32 bytes with
+  `PasKeyLengthWrong(got, 32)`.
+- `paserk.secret_from_string` refuses a pair whose public half is not the
+  seed's with `PasBadPaserkData`.
+- Fixture of `tests/paskey_tests.nv`: the `v4.local` token that two tests
+  decode had a 27-byte payload, which `decode` refuses as too short by its own
+  documentation. The payload is now 66 bytes. No assertion changed.
+- `tests/paspolicy_tests.nv` names the `iso8601` module it uses. The release
+  stamp paragraphs are removed from the tests.
+
+### Known
+
+- The PASERK identifier is BLAKE2b with a 33-byte digest over the identifier
+  prefix followed by the key's PASERK string. It was written from the PASERK
+  specification and has not been compared with a published identifier vector.
+- The `v4.local` construction was checked against a reference written from the
+  specification, not against the published `4-E-*` tokens, which were not
+  available offline. The `v4.public` side is checked against the published
+  token of vector 4-S-1.
+
 ## 0.0.4 — 2026-10-25
 
 A call that passes a variable to a `var` parameter now writes the `var` marker, which the 0.21.1 compiler asks for (E2050).  The package needs Novo 0.21.1 or later.  A file that names a sibling module's type, function or constant now has the `use` line for that module (E2033, E2003).  No signature and no behaviour changed.

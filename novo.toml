@@ -1,15 +1,10 @@
 [package]
 name        = "paseto-nv"
-version     = "0.0.4"
-description = "PASETO v4 — local over XChaCha20 with a BLAKE2b MAC, public over Ed25519 — and PASERK key serialisation, with the unverified state unusable by construction: decoding hands back a token whose claims cannot be read until a key and a policy have produced a verified one.  There is no algorithm field to confuse, because the version and the purpose are a fixed prefix and the key carries its own purpose.  Interface only — every body is a todo()."
+version     = "0.1.0"
+description = "PASETO v4 — local over XChaCha20 with a BLAKE2b MAC, public over Ed25519 — and PASERK key serialisation, with the unverified state unusable by construction: decoding hands back a token whose claims cannot be read until a key and a policy have produced a verified one.  There is no algorithm field to confuse, because the version and the purpose are a fixed prefix and the key carries its own purpose."
 license     = "Apache-2.0"
 
-# An INTERFACE release: every `pub fn` body is a `todo()`, so the
-# signatures and the effect rows are published and nothing is
-# implemented.  `novo pkg publish` recognises the shape and requires
-# both the draft stability and the 0.0.x version; the first
-# implementation is the 0.1.0 published over it.
-stability   = "draft"
+stability   = "experimental"
 
 # `core`.  Verifying a token needs the current time and a `core`
 # package may not read a clock, so an instant arrives as a PARAMETER —
@@ -20,8 +15,7 @@ stability   = "draft"
 # where a reviewer can see it.
 #
 # No device claim and no `tests/embedded_probe.nv`: the surface is
-# `Str`, `Bytes` and lists of claims.  chacha20-nv underneath makes the
-# device claim; this does not.
+# `Str`, `Bytes` and lists of claims.
 layer       = "core"
 
 category    = "web"
@@ -29,7 +23,7 @@ category    = "web"
 tags        = ["paseto", "paserk", "token", "auth", "v4", "xchacha20", "ed25519", "web"]
 repository  = "https://github.com/novolang/paseto-nv"
 maintainers = ["novo-lang"]
-novo        = ">= 0.21.1"
+novo        = ">= 0.22.0"
 
 # A library: no `main`, so `novo pkg build` type-checks and
 # effect-checks every module under `src/` and writes no binary.
@@ -38,34 +32,29 @@ novo        = ">= 0.21.1"
 "README.md" = "PASETO v4, with no algorithm field to confuse"
 
 [dependencies]
-# chacha20-nv supplies XChaCha20 — the RAW stream cipher, not the
+# blake2-nv supplies keyed BLAKE2b: the two subkeys of v4.local, its
+# tag and the PASERK key identifiers are all calls to
+# `b2bytes.blake2b_keyed_into` or `blake2b_full_into`.
+blake2-nv = "^0.1"
+
+# chacha20-nv supplies XChaCha20, the raw stream cipher and not the
 # Poly1305 AEAD.  v4.local is encrypt-then-MAC with BLAKE2b, so it uses
-# `cc20x.xapply_into`, which chacha20-nv publishes separately with the
-# warning that it authenticates nothing.  This package is the caller
-# that means it.
-#
-# A PATH DEPENDENCY, and it must become `chacha20-nv = "^0.0.1"` before
-# publish: `novo pkg publish` refuses a path at the line it is written
-# on, because the tarball would carry it and send every consumer to a
-# directory that is not on their machine.
-chacha20-nv = "^0.0.1"
+# `cc20x.xapply_into`, which authenticates nothing.
+chacha20-nv = "^0.1"
 
 # ed25519-nv supplies v4.public's signing and verification, and its key
 # types are the ones this package's `PasSecretKey` and `PasPublicKey`
-# hold.  Taking them rather than declaring a second pair is why a
-# caller that generated a key pair with `key_pair_from_seed` hands it
-# straight to `paserk`.
-ed25519-nv = "^0.0.1"
+# hold.
+ed25519-nv = "^0.1"
 
-# calendar-nv parses and formats the RFC 3339 timestamps the registered
-# claims `exp`, `nbf` and `iat` are written as.  PASETO specifies RFC
-# 3339 strings rather than JWT's numeric seconds, so a parser is not
-# optional here the way it is there — and `CivilDateTime` is
-# calendar-nv's type, so a caller comparing a claim against its own
-# clock is comparing two values of one type.
+# calendar-nv parses and formats the RFC 3339 timestamps that the
+# registered claims `exp`, `nbf` and `iat` are written as.
 calendar-nv = "^0.2.0"
 
-# base64-nv encodes every part of a token.  PASETO is base64url
-# UNPADDED throughout, which is one of base64-nv's four combinations
-# and the one it named JWT for.
+# base64-nv encodes every part of a token.  PASETO is base64url without
+# padding throughout.
 base64-nv = "^0.1.1"
+
+# crypto-nv supplies `digest.ct_eq`, the constant-time comparison of a
+# MAC and of a PASERK identifier.
+crypto-nv = "^0.1.7"

@@ -1,10 +1,7 @@
 // pasetoken.nv — the token: decoding, the two verifications, and the
 // two ways to make one.
 //
-// Every body is a `todo()`.  The signatures are the design, and the
-// compiler checks them as claims; see the README for the stamp.
-//
-// THE LOAD-BEARING INTERFACE: THE UNVERIFIED STATE IS UNUSABLE.
+// The load-bearing interface: the unverified state is unusable.
 //
 // This is jwt-nv's design, deliberately matched so that a consumer can
 // switch formats by changing a type name and nothing else.  There are
@@ -20,52 +17,256 @@
 // a check with a key it chose and a policy it wrote — not because it
 // remembered to, but because it could not write the other program.
 //
-// WHAT PASETO ADDS THAT jwt-nv CANNOT.  In a JWT the payload is
+// What PASETO adds that jwt-nv cannot.  In a JWT the payload is
 // base64: anyone holding the token reads the claims, verified or not,
 // and the `dangerous_unverified_payload_json` escape hatch jwt-nv
 // documents is a hatch onto something that was never hidden.  A
-// `v4.local` PASETO is ENCRYPTED, so the unverified state has nothing
+// `v4.local` PASETO is encrypted, so the unverified state has nothing
 // to leak — there is no way to read those claims without the key, and
-// that is a property of the format rather than of this API.  A
+// that is a property of the format rather than of this api.  A
 // `v4.public` token is signed and not encrypted, so it behaves like a
 // JWT, and `dangerous_unverified_payload_json` says so by refusing on a
 // local token rather than pretending.
 //
-// v4.local IS ENCRYPT-THEN-MAC, NOT AN AEAD, and that surprises people
+// v4.local is encrypt-then-mac, not an AEAD, and that surprises people
 // who expect XChaCha20-Poly1305:
 //
 //   * two subkeys come out of the key and the 32-byte nonce —
 //     `tmp = BLAKE2b(key, "paseto-encryption-key" || n, 56)` gives the
-//     encryption key `tmp[0..32]` and a SECOND nonce `tmp[32..56]`,
+//     encryption key `tmp[0..32]` and a second nonce `tmp[32..56]`,
 //     and `Ak = BLAKE2b(key, "paseto-auth-key-for-aead" || n, 32)`;
-//   * the message is XChaCha20 — the RAW stream cipher, which is why
+//   * the message is XChaCha20 — the raw stream cipher, which is why
 //     chacha20-nv publishes `cc20x.xapply_into` separately;
 //   * the tag is `BLAKE2b(Ak, PAE([header, n, ciphertext, footer,
 //     implicit]), 32)`, and PAE is why moving a byte from the footer
 //     into the ciphertext does not produce a valid token.
-//
-// **BLAKE2b IS A MISSING ROW.**  Nothing on the grid publishes one.
-// argon2-nv's plan note already says so from the other direction —
-// Argon2 is defined over BLAKE2b — so this is the SECOND package to
-// need it, which is the argument for the row rather than for a copy in
-// either.  The row: `blake2-nv`, `crypto` / `core` / P0, port of
-// RustCrypto's `blake2`, RFC 7693 as the oracle, BLAKE2b with its
-// keyed mode and arbitrary digest length.  The README names it; the
-// signatures here are written as though it exists, because they will
-// not change when it does.
 
 use std.bytes
+use std.list
+use std.str
+use b2bytes
+use base64
+use cc20x
+use digest
+use ed25519
+use paspae
 use paskey
 use pasclaims
 use paspolicy
 use paserr
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+// base64url without padding.
+fn b64(b: Bytes) -> Str []
+    base64.encode(b, B64UrlSafe, B64Unpadded)
+
+// The character offset a base64 refusal names.
+fn b64_offset(e: B64Error) -> Int []
+    match e
+        B64BadCharacter(at, _)     => at
+        B64NonCanonicalTail(at, _) => at
+        B64BadLength(n)            => n
+        // cov: skip — padding is refused before decoding, and `decode` allocates its own buffer
+        _                          => 0
+
+// One base64url part of a token, decoded.  A padding character is
+// refused: a PASETO is unpadded throughout.
+fn unb64(part: Str, s: Str) -> Result<Bytes, PasError> []
+    match str.index(s, "=")
+        Some(at) => Err(PasBadBase64(part, at))
+        None     =>
+            match base64.decode(s, B64UrlSafe)
+                Ok(b)  => Ok(b)
+                Err(e) => Err(PasBadBase64(part, b64_offset(e)))
+
+// Keyed BLAKE2b of `msg` under `key`, `n` bytes long.
+fn keyed_hash(key: Bytes, msg: Bytes, n: Int) -> Bytes []
+    match b2bytes.blake2b_keyed_into(key, msg, bytes.zeros(n))
+        Ok(d)  => d
+        // cov: skip — the key is 32 bytes and `n` is 32 or 56, which BLAKE2b admits
+        Err(_) => bytes.zeros(n)
+
+// XChaCha20 over `src`: the raw stream cipher, counter 0.
+fn stream_xor(key: Bytes, nonce24: Bytes, src: Bytes) -> Bytes []
+    var out = bytes.cursor_le(bytes.zeros(bytes.len(src)))
+    match cc20x.xapply_into(key, nonce24, 0, src, var out)
+        Ok(_)  => out.finish()
+        // cov: skip — the key is 32 bytes, the nonce 24, and a token is far below 2^38 bytes
+        Err(_) => bytes.zeros(0)
+
+fn labelled(label: Str, nonce: Bytes) -> Bytes []
+    bytes.from_str(label) + nonce
+
+// v4.local's two subkeys from the key and the nonce (PASETO v4
+// section "Encrypt"): 56 bytes of which the first 32 are the
+// encryption key and the last 24 the stream nonce, and a 32-byte
+// authentication key.
+struct LocalKeys
+    ek: Bytes
+    n2: Bytes
+    ak: Bytes
+
+fn local_keys(key: Bytes, nonce: Bytes) -> LocalKeys []
+    let tmp = keyed_hash(key, labelled("paseto-encryption-key", nonce), 56)
+    LocalKeys { ek: bytes.slice(tmp, 0, 32), n2: bytes.slice(tmp, 32, 56),
+                ak: keyed_hash(key, labelled("paseto-auth-key-for-aead", nonce), 32) }
+
+// The token text from the prefix, three byte strings and the footer.
+fn assemble(p: PasPurpose, a: Bytes, b: Bytes, c: Bytes, footer: PasFooter) -> Str []
+    let body = paskey.prefix(PasV4, p) + b64(a + b + c)
+    if pasclaims.footer_is_empty(footer)
+        body
+    else
+        body + "." + b64(bytes.from_str(pasclaims.footer_text(footer)))
+
+// Split a token whose prefix and part count are already good.
+fn decode_parts(token: Str, purpose: PasPurpose,
+                parts: [Str]) -> Result<UnverifiedPaseto, PasError> []
+    match unb64("payload", parts[2])
+        Err(e)      => Err(e)
+        Ok(payload) =>
+            if bytes.len(payload) < PAS_SIGNATURE_BYTES
+                Err(PasPayloadTooShort(bytes.len(payload), PAS_SIGNATURE_BYTES))
+            else if list.len(parts) == 3
+                Ok(UnverifiedPaseto { raw: token, payload: payload, footer: "" })
+            else
+                match unb64("footer", parts[3])
+                    Err(e)   => Err(e)
+                    Ok(foot) => Ok(UnverifiedPaseto { raw: token, payload: payload, footer: bytes.to_str(foot) })
+
+// Why a policy refuses a claims set, or `None` when it accepts it.
+// The issuer and audience first, then the three times, then the
+// claims the policy requires.
+fn identity_error(c: PasClaims, p: PasPolicy) -> ?PasError []
+    let iss = pasclaims.issuer(c)
+    let aud = pasclaims.audience(c)
+    if iss == ""
+        Some(PasClaimMissing(PAS_CLAIM_ISSUER))
+    else if iss != paspolicy.issuer(p)
+        Some(PasClaimMismatch(PAS_CLAIM_ISSUER, paspolicy.issuer(p), iss))
+    else if aud == ""
+        Some(PasClaimMissing(PAS_CLAIM_AUDIENCE))
+    else if aud != paspolicy.audience(p)
+        Some(PasClaimMismatch(PAS_CLAIM_AUDIENCE, paspolicy.audience(p), aud))
+    else
+        None
+
+fn expiry_error(c: PasClaims, p: PasPolicy, now: Int) -> ?PasError []
+    match pasclaims.expiration(c)
+        Some(e) =>
+            if now >= pasclaims.unix_seconds(e) + paspolicy.leeway_seconds(p)
+                Some(PasExpired(pasclaims.unix_seconds(e), now))
+            else
+                None
+        None    =>
+            if paspolicy.requires_expiration(p)
+                Some(PasClaimMissing(PAS_CLAIM_EXPIRATION))
+            else
+                None
+
+fn not_before_error(c: PasClaims, p: PasPolicy, now: Int) -> ?PasError []
+    match pasclaims.not_before(c)
+        Some(n) =>
+            if now + paspolicy.leeway_seconds(p) < pasclaims.unix_seconds(n)
+                Some(PasNotYetValid(pasclaims.unix_seconds(n), now))
+            else
+                None
+        None    =>
+            if paspolicy.requires_not_before(p)
+                Some(PasClaimMissing(PAS_CLAIM_NOT_BEFORE))
+            else
+                None
+
+fn required_error(c: PasClaims, p: PasPolicy) -> ?PasError []
+    if paspolicy.requires_issued_at(p) and pasclaims.issued_at(c) == None
+        Some(PasClaimMissing(PAS_CLAIM_ISSUED_AT))
+    else if paspolicy.requires_subject(p) and pasclaims.subject(c) == ""
+        Some(PasClaimMissing(PAS_CLAIM_SUBJECT))
+    else
+        None
+
+fn policy_error(c: PasClaims, p: PasPolicy, now: PasInstant) -> ?PasError []
+    let t = pasclaims.unix_seconds(now)
+    let a = identity_error(c, p)
+    let b = expiry_error(c, p, t)
+    let d = not_before_error(c, p, t)
+    if a != None
+        a
+    else if b != None
+        b
+    else if d != None
+        d
+    else
+        required_error(c, p)
+
+// Parse the authenticated payload and apply the policy to it.
+fn accept(text: Str, footer: Str, policy: PasPolicy,
+          now: PasInstant) -> Result<VerifiedPaseto, PasError> []
+    match paspolicy.check(policy)
+        Err(e) => Err(e)
+        Ok(_)  =>
+            match pasclaims.parse(text)
+                Err(e) => Err(e)
+                Ok(c)  =>
+                    match policy_error(c, policy, now)
+                        Some(e) => Err(e)
+                        None    => Ok(VerifiedPaseto { claims: c, footer: PasFooter { text: footer } })
+
+fn open_local(t: UnverifiedPaseto, key: PasLocalKey, policy: PasPolicy, implicit: PasImplicit,
+              now: PasInstant) -> Result<VerifiedPaseto, PasError> []
+    let n = bytes.len(t.payload)
+    let nonce = bytes.slice(t.payload, 0, PAS_NONCE_BYTES)
+    let cipher = bytes.slice(t.payload, PAS_NONCE_BYTES, n - PAS_MAC_BYTES)
+    let tag = bytes.slice(t.payload, n - PAS_MAC_BYTES, n)
+    let ks = local_keys(paskey.local_key_bytes(key), nonce)
+    match pre_auth(PasV4, PasLocal, bytes.slice(t.payload, 0, n - PAS_MAC_BYTES),
+                   PasFooter { text: t.footer }, implicit)
+        // cov: skip — the encoding is sized from its own pieces, so it is never refused
+        Err(e)  => Err(e)
+        Ok(pre) =>
+            if digest.ct_eq(keyed_hash(ks.ak, pre, PAS_MAC_BYTES), tag)
+                accept(bytes.to_str(stream_xor(ks.ek, ks.n2, cipher)), t.footer, policy, now)
+            else
+                Err(PasBadMac)
+
+fn open_public(t: UnverifiedPaseto, key: PasPublicKey, policy: PasPolicy, implicit: PasImplicit,
+               now: PasInstant) -> Result<VerifiedPaseto, PasError> []
+    let n = bytes.len(t.payload)
+    let msg = bytes.slice(t.payload, 0, n - PAS_SIGNATURE_BYTES)
+    match pre_auth(PasV4, PasPublic, msg, PasFooter { text: t.footer }, implicit)
+        // cov: skip — the encoding is sized from its own pieces, so it is never refused
+        Err(e)  => Err(e)
+        Ok(pre) =>
+            match signature_ok(key, pre, bytes.slice(t.payload, n - PAS_SIGNATURE_BYTES, n))
+                true  => accept(bytes.to_str(msg), t.footer, policy, now)
+                false => Err(PasBadSignature)
+
+// Whether `sig` verifies over `pre` under the key, at `EdStrict`.
+fn signature_ok(key: PasPublicKey, pre: Bytes, sig: Bytes) -> Bool []
+    match ed25519.signature_from_bytes(bytes.to_byte_list(sig))
+        // cov: skip — the payload carries exactly 64 signature bytes
+        Err(_) => false
+        Ok(s)  =>
+            match ed25519.verify(key.key, bytes.to_byte_list(pre), s, paskey.signature_strictness())
+                Ok(ok) => ok
+                Err(_) => false
+
+fn seal_local(key: Bytes, claims_json: Str, footer: PasFooter, implicit: PasImplicit,
+              nonce: Bytes) -> Result<Str, PasError> []
+    let ks = local_keys(key, nonce)
+    let cipher = stream_xor(ks.ek, ks.n2, bytes.from_str(claims_json))
+    match pre_auth(PasV4, PasLocal, nonce + cipher, footer, implicit)
+        // cov: skip — the encoding is sized from its own pieces, so it is never refused
+        Err(e)  => Err(e)
+        Ok(pre) => Ok(assemble(PasLocal, nonce, cipher, keyed_hash(ks.ak, pre, PAS_MAC_BYTES), footer))
 
 // ── The two token types ──────────────────────────────────────────────
 
 // A token that has been split into its parts and nothing more.
 //
 // Its claims cannot be read.  `prefix_of`, `footer_of` and
-// `has_footer` work, because choosing WHICH KEY to verify with means
+// `has_footer` work, because choosing which key to verify with means
 // reading the footer's `kid` — a token that showed nothing could never
 // be verified at all — and none of them lets a caller act on the
 // payload.
@@ -126,7 +327,14 @@ pub struct VerifiedPaseto
 //         Err(_) => println("not a token this package reads")
 // ```
 pub fn decode(token: Str) -> Result<UnverifiedPaseto, PasError> []
-    todo("paseto-nv.pasetoken.decode")
+    let parts = str.split(token, ".")
+    let n = list.len(parts)
+    if n != 3 and n != 4
+        Err(PasBadPartCount(n))
+    else
+        match paskey.parse_prefix(token)
+            Err(e) => Err(e)
+            Ok(vp) => decode_parts(token, vp.1, parts)
 
 // The version and purpose prefix an unverified token carries.
 //
@@ -139,7 +347,7 @@ pub fn decode(token: Str) -> Result<UnverifiedPaseto, PasError> []
 //         Err(_) => println("not a token")
 // ```
 pub fn prefix_of(t: UnverifiedPaseto) -> Str []
-    todo("paseto-nv.pasetoken.prefix_of")
+    paskey.prefix(PasV4, purpose_of(t))
 
 // The purpose an unverified token is for.
 //
@@ -153,7 +361,10 @@ pub fn prefix_of(t: UnverifiedPaseto) -> Str []
 //         Err(_) => println("not a token")
 // ```
 pub fn purpose_of(t: UnverifiedPaseto) -> PasPurpose []
-    todo("paseto-nv.pasetoken.purpose_of")
+    if str.starts_with(t.raw, "v4.local.")
+        PasLocal
+    else
+        PasPublic
 
 // The version an unverified token names.
 //
@@ -167,13 +378,13 @@ pub fn purpose_of(t: UnverifiedPaseto) -> PasPurpose []
 //         Err(_) => println("not a token")
 // ```
 pub fn version_of(t: UnverifiedPaseto) -> PasVersion []
-    todo("paseto-nv.pasetoken.version_of")
+    PasV4
 
 // The footer of an unverified token.
 //
-// READABLE BEFORE VERIFICATION, and it has to be: the footer is where
+// Readable before verification, and it has to be: the footer is where
 // a `kid` lives, and choosing a key requires reading it.  The footer
-// is AUTHENTICATED once the token verifies, so a caller may use it to
+// is authenticated once the token verifies, so a caller may use it to
 // pick a key and must not use it as a claim about the world until
 // then — which is the same rule jwt-nv's `kid_of` states.
 //
@@ -187,7 +398,7 @@ pub fn version_of(t: UnverifiedPaseto) -> PasVersion []
 //         Err(_) => println("not a token")
 // ```
 pub fn unverified_footer(t: UnverifiedPaseto) -> PasFooter []
-    todo("paseto-nv.pasetoken.unverified_footer")
+    PasFooter { text: t.footer }
 
 // Whether an unverified token has a footer at all.
 //
@@ -200,13 +411,13 @@ pub fn unverified_footer(t: UnverifiedPaseto) -> PasFooter []
 //         Err(_) => println("not a token")
 // ```
 pub fn has_footer(t: UnverifiedPaseto) -> Bool []
-    todo("paseto-nv.pasetoken.has_footer")
+    t.footer != ""
 
-// The payload of an unverified PUBLIC token, as JSON text.
+// The payload of an unverified public token, as JSON text.
 //
-// THE ONE ESCAPE HATCH, and it is named so it cannot be mistaken.  It
-// returns TEXT rather than `PasClaims`, so it cannot be handed to
-// anything expecting verified claims, and it REFUSES a local token —
+// The one escape hatch, and it is named so it cannot be mistaken.  It
+// returns text rather than `PasClaims`, so it cannot be handed to
+// anything expecting verified claims, and it refuses a local token —
 // whose payload is encrypted and which this function could not read
 // even if it wanted to.  That refusal is worth more than it looks: it
 // is where a caller finds out that the two purposes are not
@@ -229,7 +440,9 @@ pub fn has_footer(t: UnverifiedPaseto) -> Bool []
 //         Err(_) => println("not a token")
 // ```
 pub fn dangerous_unverified_payload_json(t: UnverifiedPaseto) -> Result<Str, PasError> []
-    todo("paseto-nv.pasetoken.dangerous_unverified_payload_json")
+    match purpose_of(t)
+        PasLocal  => Err(PasPurposeMismatch("local", "public"))
+        PasPublic => Ok(bytes.to_str(bytes.slice(t.payload, 0, bytes.len(t.payload) - PAS_SIGNATURE_BYTES)))
 
 // ── The two checks ───────────────────────────────────────────────────
 
@@ -237,7 +450,7 @@ pub fn dangerous_unverified_payload_json(t: UnverifiedPaseto) -> Result<Str, Pas
 //
 // `PasPurposeMismatch` on a public token — a local key cannot open one
 // and there is no configuration in which it could.  `PasBadMac` on a
-// tag that did not match, carrying NOTHING: there is exactly one thing
+// tag that did not match, carrying nothing: there is exactly one thing
 // a caller may learn, and the claims are not decrypted at all when it
 // fails.
 //
@@ -267,7 +480,9 @@ pub fn dangerous_unverified_payload_json(t: UnverifiedPaseto) -> Result<Str, Pas
 // ```
 pub fn decrypt(t: UnverifiedPaseto, key: PasLocalKey, policy: PasPolicy, implicit: PasImplicit,
                now: PasInstant) -> Result<VerifiedPaseto, PasError> []
-    todo("paseto-nv.pasetoken.decrypt")
+    match purpose_of(t)
+        PasPublic => Err(PasPurposeMismatch("public", "local"))
+        PasLocal  => open_local(t, key, policy, implicit, now)
 
 // Check a `v4.public` token's signature, then apply the policy.
 //
@@ -298,11 +513,13 @@ pub fn decrypt(t: UnverifiedPaseto, key: PasLocalKey, policy: PasPolicy, implici
 // ```
 pub fn verify(t: UnverifiedPaseto, key: PasPublicKey, policy: PasPolicy, implicit: PasImplicit,
               now: PasInstant) -> Result<VerifiedPaseto, PasError> []
-    todo("paseto-nv.pasetoken.verify")
+    match purpose_of(t)
+        PasLocal  => Err(PasPurposeMismatch("local", "public"))
+        PasPublic => open_public(t, key, policy, implicit, now)
 
 // The claims of a verified token.
 //
-// THE FUNCTION THE WHOLE DESIGN IS ABOUT.  It takes a
+// The function the whole design is about.  It takes a
 // `VerifiedPaseto`, and there is no other way to obtain a `PasClaims`
 // from a token and no way to obtain a `VerifiedPaseto` except from
 // `verify` or `decrypt`.
@@ -317,7 +534,7 @@ pub fn verify(t: UnverifiedPaseto, key: PasPublicKey, policy: PasPolicy, implici
 //         Err(_) => println("not a token")
 // ```
 pub fn claims_of(t: VerifiedPaseto) -> PasClaims []
-    todo("paseto-nv.pasetoken.claims_of")
+    t.claims
 
 // The footer of a verified token — authenticated, and safe to act on.
 //
@@ -334,21 +551,21 @@ pub fn claims_of(t: VerifiedPaseto) -> PasClaims []
 //         Err(_) => println("not a token")
 // ```
 pub fn footer_of(t: VerifiedPaseto) -> PasFooter []
-    todo("paseto-nv.pasetoken.footer_of")
+    t.footer
 
 // ── Making a token ───────────────────────────────────────────────────
 
 // Encrypt a claims payload as a `v4.local` token.
 //
-// THE 32 RANDOM BYTES ARE AN ARGUMENT.  A `core` package has no
-// `[rand]` row, so the nonce is the caller's — spent once, visibly, in
+// The 32 random bytes are an argument.  A `core` package has no
+// random-number effect, so the nonce is the caller's — spent once, visibly, in
 // the host — and the consequence is one a test wants anyway: the
 // specification's own vectors can be reproduced byte for byte by
 // replaying their nonce, which no library that picks its own can do.
 //
-// A REPEATED NONCE IS CATASTROPHIC and this package cannot stop you.
+// A repeated nonce is catastrophic and this package cannot stop you.
 // v4.local derives both the encryption key and the authentication key
-// from the key AND the nonce, so a repeated nonce is a repeated
+// from the key and the nonce, so a repeated nonce is a repeated
 // keystream and a repeated authentication key.  32 bytes is safe to
 // pick uniformly at random, which is the discipline to use.
 //
@@ -369,13 +586,17 @@ pub fn footer_of(t: VerifiedPaseto) -> PasFooter []
 // ```
 pub fn encrypt(key: PasLocalKey, claims_json: Str, footer: PasFooter, implicit: PasImplicit,
                nonce: Bytes) -> Result<Str, PasError> []
-    todo("paseto-nv.pasetoken.encrypt")
+    let n = bytes.len(nonce)
+    if n != PAS_NONCE_BYTES
+        Err(PasKeyLengthWrong(n, PAS_NONCE_BYTES))
+    else
+        seal_local(paskey.local_key_bytes(key), claims_json, footer, implicit, nonce)
 
 // Sign a claims payload as a `v4.public` token.
 //
 // No nonce: Ed25519 is deterministic, so this needs no entropy at all
 // and the same inputs give the same token every time.  That is worth
-// saying because it is the one place PASETO is EASIER than a JWT to
+// saying because it is the one place PASETO is easier than a JWT to
 // use safely — there is nothing to get wrong.
 //
 // ```novo
@@ -394,13 +615,19 @@ pub fn encrypt(key: PasLocalKey, claims_json: Str, footer: PasFooter, implicit: 
 // ```
 pub fn sign(key: PasSecretKey, claims_json: Str, footer: PasFooter,
             implicit: PasImplicit) -> Result<Str, PasError> []
-    todo("paseto-nv.pasetoken.sign")
+    let m = bytes.from_str(claims_json)
+    match pre_auth(PasV4, PasPublic, m, footer, implicit)
+        // cov: skip — the encoding is sized from its own pieces, so it is never refused
+        Err(e)  => Err(e)
+        Ok(pre) =>
+            let sig = bytes.from_byte_list(ed25519.signature_bytes(ed25519.sign(paskey.signing_key_of(key), bytes.to_byte_list(pre))))
+            Ok(assemble(PasPublic, m, sig, bytes.zeros(0), footer))
 
 // The exact bytes a token's MAC or signature is taken over: `PAE` of
 // the header, the payload parts, the footer and the implicit
 // assertion.
 //
-// PUBLIC AND EXACT, because this is where a port disagrees with every
+// Public and exact, because this is where a port disagrees with every
 // other implementation and cannot tell why.  A pre-authentication
 // encoding that omitted the implicit assertion, or put the footer
 // before the ciphertext, produces tokens this implementation reads
@@ -422,4 +649,14 @@ pub fn sign(key: PasSecretKey, claims_json: Str, footer: PasFooter,
 // ```
 pub fn pre_auth(v: PasVersion, p: PasPurpose, payload: Bytes, footer: PasFooter,
                 implicit: PasImplicit) -> Result<Bytes, PasError> []
-    todo("paseto-nv.pasetoken.pre_auth")
+    let h = bytes.from_str(paskey.prefix(v, p))
+    let f = bytes.from_str(pasclaims.footer_text(footer))
+    let i = bytes.from_str(pasclaims.implicit_text(implicit))
+    match p
+        PasPublic => paspae.encode([h, payload, f, i])
+        PasLocal  =>
+            let cut = if bytes.len(payload) < PAS_NONCE_BYTES
+                bytes.len(payload)
+            else
+                PAS_NONCE_BYTES
+            paspae.encode([h, bytes.slice(payload, 0, cut), bytes.slice(payload, cut, bytes.len(payload)), f, i])

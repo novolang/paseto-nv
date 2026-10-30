@@ -1,10 +1,6 @@
 // paspolicy_tests.nv — what a service accepts, and the claims and
 // clock it is checked against.
 //
-// RED ON PURPOSE: every assertion against a FUNCTION reaches
-// `not implemented: paseto-nv.<module>.<fn>`, because every body under
-// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
-// because a constant is not a stub.
 
 use std.test
 use paspolicy

@@ -1,0 +1,419 @@
+// generated_vectors_tests.nv — expected values produced by vectors/generate.py.
+//
+// Do not edit by hand: run `python3 -I generate.py` in tests/vectors.  The
+// tokens and PASERK strings come from the reference in paseto_ref.py, which is
+// written from the PASETO v4 and PASERK specifications on hashlib's BLAKE2b
+// and the `cryptography` package's Ed25519 and ChaCha20.  Loading the
+// reference checks HChaCha20 against draft-irtf-cfrg-xchacha section 2.2.1
+// and reproduces the published token of PASETO test vector 4-S-1.
+//
+// Rows are: key or seed, nonce or public key, message, footer, implicit
+// assertion (all hex), the token, and `ok` when the message is a claims
+// payload that the policy used below accepts or `plain` when it is not.
+
+use std.bytes
+use std.str
+use std.test
+use paserr
+use pasclaims
+use paskey
+use paspolicy
+use pasetoken
+use paserk
+
+fn hex(s: Str) -> Bytes
+    bytes.from_hex(s) ?? bytes.zeros(0)
+
+fn local_rows() -> [[Str]]
+    [
+        ["707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "",
+        "",
+        "",
+        "v4.local.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACJ9-FQi28Bj60m8wi4FU0K5kNSrzOWAn0jlvUK52fM_A",
+        "plain"],
+        ["a91670fa3aa9e0cbd0a1f31e1bbb875bea15cca1f7374794d2d728c2c64dbcda",
+        "f0c11bfdecd4e9f5fff3b9dc1b82c11d7c19515089f38653a2d69814f0769c9a",
+        "7b7d",
+        "7b226b6964223a226b342e6c69642e616263227d",
+        "74656e616e742d3432",
+        "v4.local.8MEb_ezU6fX_87ncG4LBHXwZUVCJ84ZTotaYFPB2nJq6IoizL2-uFGid2IAD-meZhNsHJMhSgSC1GAiSk5f1VJh2.eyJraWQiOiJrNC5saWQuYWJjIn0",
+        "plain"],
+        ["3e59cfd77726d43353a2926b5d6fed8a0f49a35700886210ed3d8e200c6a501a",
+        "8d9733d8196a74dbb46571223255756a7f7d66499b9f415d94faa966922f673d",
+        "7b2264617461223a22746869732069732061207369676e6564206d657373616765222c22657870223a22323032322d30312d30315430303a30303a30302b30303a3030227d",
+        "66",
+        "78",
+        "v4.local.jZcz2BlqdNu0ZXEiMlV1an99Zkmbn0FdlPqpZpIvZz1PI3e7qUqPc1QHRXoyShwPV8f375SSYlll2nLqOSg-oFecVox4apu7ELdkHDywTnDc9HjJJrB2Qu7JBZyPoTDCf_aFVV-LuiGCJkQTLDhmfBAD32J3BVPSLMEmVpfSzlqppO5AVw.Zg",
+        "plain"],
+        ["06542c960d290bdcb183680b80717f80027b6bc414071246259efbdd667b8d8b",
+        "f72892982854d0e6884e15835a92ceaf340f9bec0ae92e2ee834350525f19bf2",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a22227d",
+        "",
+        "",
+        "v4.local.9yiSmChU0OaIThWDWpLOrzQPm-wK6S4u6DQ1BSXxm_Ko_o5WZizXiOXqyeQEfgUsCmyjXLmF0gP0KQ67BXktVxlyaFbp7jyUsQ0FjgTSrujQeBI5eNRVDlReHjCgT6tbeKEUshw2cDhbq1yq_REmrINEb4Cv1ORfWGCSly2P0vDGOIPvV8AAObxhBAKk_rK1preZizo",
+        "ok"],
+        ["414516a995550fa6bbc75d81976e6cb43f70db7d88b045dedf5c431c88327c75",
+        "3fc939e543a165932c4a380e31ff72c08e8972f6ee2033cbe8ddec1bb1c82de2",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278227d",
+        "",
+        "",
+        "v4.local.P8k55UOhZZMsSjgOMf9ywI6JcvbuIDPL6N3sG7HILeLF7Gboal-lgYiLeH9XhH26rLGQYaSWsXqWO0GsLf2ZeluFNLsr5o2y01wsUfknpTaEEyJeyMwHxckFM31KSpdln0X6YHOWABKU5-9xhPyi4VLi-JX5WMfGr_BTCWbD5GhHJ-XiWkmRAigTpvlJvKnCtCGF1Qec",
+        "ok"],
+        ["99c122fa9fc07eb7b668f1c22839830e688c16da717860bc4e09877cd724543e",
+        "c90c6b7d35768789eeee359759efc19b94a2e3e7e5f1c1e8808df4c70f2f428e",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278787878787878227d",
+        "7b226b6964223a226b342e6c69642e616263227d",
+        "74656e616e742d3432",
+        "v4.local.yQxrfTV2h4nu7jWXWe_Bm5Si4-fl8cHogI30xw8vQo5TFQKO7qHEVouDQ2rKP5gIozfxkYHCVQXJQb7xK0CAZLztGdloZOw9pXj30gVhSO8cKJze3gGyBhW8QbOdLBPFhP5mexUeB6SA3EoGUwaV4zDf3pnhLpcY3ayOtmwFph7x7Q_UGLqtfah3FaLwjiF255X1fpytvgIjN1x4.eyJraWQiOiJrNC5saWQuYWJjIn0",
+        "ok"],
+        ["a2ea93a4220d1ea167537bc04a2e8df5db11a32babc1610fad37b3f6866a4466",
+        "c5d6623a37fa0f15c9f3cb5dc0f002b165bd04d2f05ee8eb3d182ba413795387",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a227878787878787878227d",
+        "66",
+        "78",
+        "v4.local.xdZiOjf6DxXJ88tdwPACsWW9BNLwXujrPRgrpBN5U4ebIucELi3AJ85JW0OayLjQh-ro3UBBivzo3T9y7iPpYnpOGsuUjMNKha_s4Xe2xJXS10Bi65Jz2VH_uUaz9pggOEaQYt75RGwpO6C742SnIxf9i2cVNTXQPHFpaMaw5leS_o8s5zbL3obd5VfzLI0JsBnV_5f8z91kWTo8zA.Zg",
+        "ok"],
+        ["57eae4c9485b949a89ebfe42c41120832740950f1632adf1a6adc4ee04d34ab8",
+        "c5291d5a18d2cbf92d0f6398b2ef267274fd19fe2777e14f0bc1fc49cee10500",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a22787878787878787878227d",
+        "",
+        "",
+        "v4.local.xSkdWhjSy_ktD2OYsu8mcnT9Gf4nd-FPC8H8Sc7hBQChB4C9UjQsO9JmfL270_xkeaTmjIxmbGGOfkIVQqM9MSxEVnZEklxdEQiFZysA9l26ZgUg2YSMWYdKdieXBizgDVRczwsahHQ39gpAXsZl6EsRzmfj9k0i8DhiP77d2tcY6Se5xAYqCvOUVSBMqT2kGX2Rvr8jiToOpEzcSgs",
+        "ok"],
+        ["bab5f4f6328f98aaa24f9b89d98b0f021109f10c78aed09e5f64dc614accd6aa",
+        "a435c0270cd13a9249918ff85ece9fc091542c6ae5eb164ea0593ef17ce2f09a",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+        "",
+        "",
+        "v4.local.pDXAJwzROpJJkY_4Xs6fwJFULGrl6xZOoFk-8Xzi8JpsJDtPJ_kDe_Ie_we0mBTHqPzCDWf7ElF5oNN-e7Vk6A6wUprbxw5v_9Frg9-Wa2vJtIDZi51VN_9ZM2b61lwHOq6kVIUMnivcIQh8VRQT-CWiF_DfeYrIBHDszaOHY0ajYlMKKmWT9nyrRoaWTHZgFhmcL9elvoEfPb4_HEX-fxb0UMmXpUUjLbw4QN_-_SQTA1ad7bfExqnhDlOu",
+        "ok"],
+        ["6de84181aa5f331df4e086e599df64834d356fadef9017dd97294021a565264e",
+        "4c5e85ab86bbbded6e4b547f5479219fe809e3e91558753a7670ad995010b998",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+        "7b226b6964223a226b342e6c69642e616263227d",
+        "74656e616e742d3432",
+        "v4.local.TF6Fq4a7ve1uS1R_VHkhn-gJ4-kVWHU6dnCtmVAQuZh6gdmibxE1lzKh1tPYg-QPHCbL9hZt6W-3zz_J7TTzvRK-RJFrnCdALWUXeG-KVUbNu1l8Za4Xz8R_z1VyyeVoZaXNBHFVJZ8kVlJmFw6yX4O1K_Efa6q5z9A-5gNsYyOgajgCuGfuaOEeoKJMAeoBXQun7y22ex_zlheYfkducQcXd3MOVVx-CY2jquLg4BlsYPAAzQL7EYcS0gDckXvfwj-uShpTqE8_dXzaeMpQUdLzwXI6vyoCkKTZLbELHmJYxH4PQFjBlMb64rxqMwH9LQGdM2snHQHR.eyJraWQiOiJrNC5saWQuYWJjIn0",
+        "ok"],
+        ["4079ac34e636e67e6786ad090cbe104dfe7bb95721b43a284fa07a14c0403d44",
+        "b335aa68763f011117f5537d01da6f8ad9e372ae12eae8ef8586ff630ebd4e75",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+        "66",
+        "78",
+        "v4.local.szWqaHY_AREX9VN9Adpvitnjcq4S6ujvhYb_Yw69TnVgDR8dGtSRlM4Idhn-AV6C2B0kYIHaoECEmyakKot6wkbaJymkZaq7Nzapm4MMczZ6unxeO8YJ9FY6oAc3cmR_KgBklP02xCd-DkEl__sy8RlV8akvoBgsktbxnpYED9t1CKhXab8m8Bosliq69sDAko9WSSm-IIMcI3yPECH5ayEi_uVeVycSFH30ytW4IQc79jopxK3OacXdOJd5F28nwUygNqclheZHBeTlyy6Wq0HV1_V3jLaretoq3cfINis6shGGxhGhJt9xTp-CitA99KDnrvaiN9R_ELL1O1qqfLZ6PwFI6h_g3RGLpht45urw2EHq39_z-DG-r9orwFq0w9A7U-2-RbQZmMipypVDp3NwvQBBMMTDbveNTnZlOIkSbHimRqJOVXY2RExWq8CdIEnjH_m52G6TpfXCVcLXT-htXyPo8aqWmJikYPQIHaTMRa77wwdTk7DwwNxCgXJOJPfO8ph589_g7-UlbURxh1pg4dbVF95TbW5IQctIgmtk87hfBfQ1p_ycQvjdVyGlsujn7ExUbDhajHfrSAXGnEc.Zg",
+        "ok"]]
+
+fn public_rows() -> [[Str]]
+    [
+        ["76f275d9f0cefe505077cb8c436f2f2e3b3e2c51f628070ef787c0bf7e34d45d",
+        "e8bfd2ce6fa9115434505cfed0fb6294884aaf080bbad565c5ca56a57dfc7fe7",
+        "",
+        "",
+        "",
+        "v4.public.Fu3ZQzBSgxUWU1ar1yHcb57uNEAhmsXWBky_Y3a0eOwHfOEkFwAogIjIk-0_Z2QqFXMoeWc-ZsIXhPdc_WOjDw",
+        "plain"],
+        ["82eee4b6a968742a3f8192f0cc74532167978d035dfe3e604194de12b7f8e92f",
+        "9e86249e80cd9508b9e60b5aed789708d84ec6ce967ac7e7b1b83280ac18dfcb",
+        "7b7d",
+        "7b226b6964223a226b342e6c69642e616263227d",
+        "74656e616e742d3432",
+        "v4.public.e33t76EsLybqiClg2gi1sVL0_JCDB26brKCOZWXVb1Zhhy9WupEN5F4iiPS-rFIaXKGBCMD_VlXszetVxzQ1fhwO.eyJraWQiOiJrNC5saWQuYWJjIn0",
+        "plain"],
+        ["b4cbfb43df4ce210727d953e4a713307fa19bb7d9f85041438d9e11b942a3774",
+        "1eb9dbbbbc047c03fd70604e0071f0987e16b28b757225c11f00415d0e20b1a2",
+        "7b2264617461223a22746869732069732061207369676e6564206d657373616765222c22657870223a22323032322d30312d30315430303a30303a30302b30303a3030227d",
+        "66",
+        "78",
+        "v4.public.eyJkYXRhIjoidGhpcyBpcyBhIHNpZ25lZCBtZXNzYWdlIiwiZXhwIjoiMjAyMi0wMS0wMVQwMDowMDowMCswMDowMCJ96-jI89bQ_eyLvFGRPdChQ0ewxh3ItPoJE--ThEd4-p93jsjsYmpqHWJmFV4oF9tp8zucKAy3HE4UQxGAk9R9Dg.Zg",
+        "plain"],
+        ["54effe34c90eaa2f011615f490f447e02eaedbf3e4ae747816e6d10c4431978d",
+        "4cc0e8a791ca65941ea5f5abab18e739b8fe729a8319eb44a0ae5671b0eeaa1e",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a22227d",
+        "",
+        "",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiIifTExo4MVfuzc3oE3TFqiFD7CfBlArX0ZcXy-zetJV2c3oxVPyZA7J-DShcpIRAKXCXPOWo4aQZUtS3enn2B0Zw0",
+        "ok"],
+        ["7bd06f1f4062cc66994aca45efce120c1a0fe79a06802cf7b3fcf446225b24f0",
+        "ecc7a055636b36c9ac21d440f27c7761baad7191570b9aa37a59a3ba8edd69b4",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278227d",
+        "",
+        "",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiJ4In1z9dzX74OVid6A-SK_GiHR8s5Mm9JdlcNEx3G2SP-x8hAtC1Qb8h_Ex63KXqmBKBo3Doirnf7rAYdzmLRAKNoM",
+        "ok"],
+        ["099fa504e69e14ec3522e7155f70a48bb59e542da1a8dc341201a3bc2b91128a",
+        "9f4d9094553dae84f5d5dbb14dbcefd93909a0cdc9217386fc4179c86642cfcf",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278787878787878227d",
+        "7b226b6964223a226b342e6c69642e616263227d",
+        "74656e616e742d3432",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiJ4eHh4eHh4In14IiCQclsTz06h59JOlX61JfCrKyn5Ba6wsIIq0Ay_amIwfnEar2bOBUayxn-FkUg_4MIwbqS4K25t1XP37HsG.eyJraWQiOiJrNC5saWQuYWJjIn0",
+        "ok"],
+        ["a9680b21e64cb74e3fcb8306f0fd282f373319efcb300ab1651c028b197602cd",
+        "d54fcbc468f451292aa628c9636a603f8fd4ff409ce0f11576f32eac2731b33c",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a227878787878787878227d",
+        "66",
+        "78",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiJ4eHh4eHh4eCJ9YOveoOC0ohIvtKfDyDNrcgcEaPruJk3rB5x2RwWLfCamylGvke3j-rscP9xBGH-kvME0dc85LpM_3tWs4eJzCQ.Zg",
+        "ok"],
+        ["c6b4e3ac4ed41fc5694df5f6fe9daaf4efcc2409f5f12d1f9254359bf9a5e919",
+        "582984b463ac2934108c3ec61f4cd8cc3899490de4cc4b6b5ebcdebe1414f4a3",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a22787878787878787878227d",
+        "",
+        "",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiJ4eHh4eHh4eHgifXGVFSs-LdKZwIiRhKKdS-LGnjxgUJybQqQwoQcq6tMpObfBRiX_EYoUelczgWyzuO5VfoWneVwZHaO4RGUTWwk",
+        "ok"],
+        ["994747b34de92352704ae6fdd5cd45dfd3175747820c5b9abd5e15b11f661a74",
+        "8629f0350649d84570e685da1ea3857c84ec709220137b6ee3a15a64ccff777b",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+        "",
+        "",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiJ4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4In2ppvc9OUOGv9oRIlozhQbHFcIpB86WxMsLsHIaWwnw8v8DOCs4lnEE7bQYelNKLkJp-2qvdf9WYQoEsLnXpU8J",
+        "ok"],
+        ["e769fff22ce2d5b5321c2b941683ffe0942849c59432c2dfd539a21dfcc15e84",
+        "66340bc045637d50bdf3d11a6ca3c4871e62864d31ef300ad7bd0ea232a1aa3d",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a2278787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+        "7b226b6964223a226b342e6c69642e616263227d",
+        "74656e616e742d3432",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiJ4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4In0vBOKakfP9g0WmoS4n9XqIPNEBMeTMh4RC9rt4pMNFjFdd0qCkBAWJZxhKyjGI_hDZo8u0MyzR2LyLZ7C6x2sA.eyJraWQiOiJrNC5saWQuYWJjIn0",
+        "ok"],
+        ["2a33c610423e17083dac6f2cb9c081d3a0c989009a33318920372a8187254244",
+        "eb4d0724029c441b1de26fba841b346fb5b85132661d679b1e90e90014925075",
+        "7b22697373223a2268747470733a2f2f617574682e6578616d706c65222c22617564223a22617069222c22657870223a22323033392d30312d30315430303a30303a30302b30303a3030222c22706164223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d",
+        "66",
+        "78",
+        "v4.public.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImF1ZCI6ImFwaSIsImV4cCI6IjIwMzktMDEtMDFUMDA6MDA6MDArMDA6MDAiLCJwYWQiOiJ4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgifRRomtg_iwnBy9lXTgHHfsfK4jTBXb9OXaacKHwjNgJMEaw8SmPyBZDDqdhoVaQCsnuE_BISenR7wwldvJrDTg4.Zg",
+        "ok"]]
+
+// kind, key or seed (hex), PASERK string, identifier
+fn paserk_rows() -> [[Str]]
+    [
+        ["local",
+        "d158cc5da9b877da788117197a64bc7d13a7c9c6d3cb720a683dc29e3252e2ea",
+        "k4.local.0VjMXam4d9p4gRcZemS8fROnycbTy3IKaD3CnjJS4uo",
+        "k4.lid.uSqmt3gx71xOJphWxv8DzEsSCk0QHYcBfJ-WwCR4EBTN"],
+        ["local",
+        "0a6808c1459d575bb81ab35971f374c2858e3ea71d9377d37581699f26d549c8",
+        "k4.local.CmgIwUWdV1u4GrNZcfN0woWOPqcdk3fTdYFpnybVScg",
+        "k4.lid.dfvFb3e0OuLr_QDRkF3Wl-bdwQVWlLQQLZHKO5m9LkeO"],
+        ["local",
+        "935c446bf10f6f9cb941af66c5969026eb171981f85b03e63d4724c10e921169",
+        "k4.local.k1xEa_EPb5y5Qa9mxZaQJusXGYH4WwPmPUckwQ6SEWk",
+        "k4.lid.9XqgjezMUInjewQGXm-Kce1SFZiLFqh457VKGDE2PBDN"],
+        ["local",
+        "a883a46076f2550c009ba311c6541b4865c9464be3ffbd5aee448fdb66e76a0b",
+        "k4.local.qIOkYHbyVQwAm6MRxlQbSGXJRkvj_71a7kSP22bnags",
+        "k4.lid.7JFyCEbo3B9uepfReFPX-oQL0Ru0VDx-IAYXDUEUzIJa"],
+        ["public",
+        "2dc966e3715badc323408748fd3ea723346e1822ed3c3d27171677590acd1cd8",
+        "k4.public.Lclm43FbrcMjQIdI_T6nIzRuGCLtPD0nFxZ3WQrNHNg",
+        "k4.pid.oYZMEA9HzxAMDZyVBUojLoadMCqzZsncuh0CEZodIbZo"],
+        ["secret",
+        "b063859bb7cb187dab443fbad37f149ade7805de5fc5124f0667454a6554d06f",
+        "k4.secret.sGOFm7fLGH2rRD-6038Umt54Bd5fxRJPBmdFSmVU0G8tyWbjcVutwyNAh0j9PqcjNG4YIu08PScXFndZCs0c2A",
+        "k4.sid.AZ3378adkugKQEILGXcIB0F6iWq27MSjaoTp-EOWDpvx"],
+        ["public",
+        "9e6543bcf8dc494ebf86ebdb0e9a05047cb97173318a2630ec86b71657b18dd4",
+        "k4.public.nmVDvPjcSU6_huvbDpoFBHy5cXMxiiYw7Ia3FlexjdQ",
+        "k4.pid.ZDY8UkJcR2__u9SB5PiMhqOThk4vYrzBAUVexzPG25PX"],
+        ["secret",
+        "ed2dc7b910d34a00186a9b116880c612d633be577f8a6ff271af4a9075b83f47",
+        "k4.secret.7S3HuRDTSgAYapsRaIDGEtYzvld_im_yca9KkHW4P0eeZUO8-NxJTr-G69sOmgUEfLlxczGKJjDshrcWV7GN1A",
+        "k4.sid.iLuss7KAH9kwAmAwd7vFol3Vcb6MMxorvmsV6RvgCL1X"],
+        ["public",
+        "9506d745c95d6c7e4a78133e4c0d15698a9bd8ec927785ba6869a83741d12f19",
+        "k4.public.lQbXRcldbH5KeBM-TA0VaYqb2OySd4W6aGmoN0HRLxk",
+        "k4.pid.INB7Euc0ZGY2wzDpvfitAvn9juM2d14Ep28hLw2hWEhz"],
+        ["secret",
+        "174c7a5b36f643362f8322b9f9ab4e17a021d3768c6faaa8337e2e6e89f98ee0",
+        "k4.secret.F0x6Wzb2QzYvgyK5-atOF6Ah03aMb6qoM34ubon5juCVBtdFyV1sfkp4Ez5MDRVpipvY7JJ3hbpoaag3QdEvGQ",
+        "k4.sid.dIzQ2eTpkusYXGRPFZ4gsUhfZZTdTGk2P66NcFUGg1uh"],
+        ["public",
+        "70996c4d272a9cba386eb1b1fddbcda98e058588072741db0c935549842ad3e5",
+        "k4.public.cJlsTScqnLo4brGx_dvNqY4FhYgHJ0HbDJNVSYQq0-U",
+        "k4.pid.FAmUQyaj7R6mtQuz7JK8OUAkaHxxcNSxzO7OKWXw0ZXJ"],
+        ["secret",
+        "60f087e469967f82d61f91fb2f453875206dab36a30e928357fbdefdcfd1844c",
+        "k4.secret.YPCH5GmWf4LWH5H7L0U4dSBtqzajDpKDV_ve_c_RhExwmWxNJyqcujhusbH9282pjgWFiAcnQdsMk1VJhCrT5Q",
+        "k4.sid.AkO5vnqBSA5VBN-b_jgq7NXFdRVvYzRjUfaO6qibvkxR"]]
+
+// ── The rows through the package ─────────────────────────────────────
+
+fn policy() -> PasPolicy
+    paspolicy.requiring(paspolicy.strict(), "https://auth.example", "api")
+
+fn now() -> PasInstant
+    pasclaims.instant(1800000000)
+
+fn text(s: Str) -> Str
+    bytes.to_str(hex(s))
+
+fn footer_of_row(r: [Str]) -> PasFooter
+    if r[3] == ""
+        pasclaims.no_footer()
+    else
+        pasclaims.footer(text(r[3]))
+
+fn implicit_of_row(r: [Str]) -> PasImplicit
+    if r[4] == ""
+        pasclaims.no_implicit()
+    else
+        pasclaims.implicit(text(r[4]))
+
+fn local_key_of(r: [Str]) -> PasLocalKey
+    match paskey.local_key(hex(r[0]))
+        Ok(k)  => k
+        Err(_) => paskey.local_key(bytes.zeros(32))!
+
+// Flip one character in the middle of the payload to another valid one.
+fn tampered(token: Str) -> Str
+    let at = 40
+    let c = str.slice(token, at, at + 1)
+    let d = if c == "A"
+        "B"
+    else
+        "A"
+    str.slice(token, 0, at) + d + str.slice(token, at + 1, str.len(token))
+
+@test
+fn test_encrypt_reproduces_every_local_token() [io]
+    var i = 0
+    for r in local_rows()
+        test.case("row ${i}")
+        match pasetoken.encrypt(local_key_of(r), text(r[2]), footer_of_row(r), implicit_of_row(r), hex(r[1]))
+            Ok(s)  => test.assert_eq_str(s, r[5])
+            Err(e) => test.fail(e.message())
+        i = i + 1
+
+@test
+fn test_decrypt_opens_every_local_token_and_returns_what_was_sealed() [io]
+    var i = 0
+    for r in local_rows()
+        test.case("row ${i}")
+        match pasetoken.decode(r[5])
+            Err(e) => test.fail(e.message())
+            Ok(t)  =>
+                test.assert_eq_str(pasclaims.footer_text(pasetoken.unverified_footer(t)), text(r[3]))
+                match pasetoken.decrypt(t, local_key_of(r), policy(), implicit_of_row(r), now())
+                    Ok(v)  =>
+                        test.assert_eq_str(r[6], "ok")
+                        test.assert_eq_str(pasclaims.payload_json(pasetoken.claims_of(v)), text(r[2]))
+                        test.assert_eq_str(pasclaims.footer_text(pasetoken.footer_of(v)), text(r[3]))
+                    Err(e) =>
+                        test.assert_eq_str(r[6], "plain")
+                        test.assert(not paserr.is_authentication_failure(e))
+        i = i + 1
+
+@test
+fn test_a_wrong_implicit_assertion_or_a_changed_byte_is_a_bad_mac_and_nothing_else() [io]
+    var i = 0
+    for r in local_rows()
+        test.case("row ${i}")
+        match pasetoken.decode(r[5])
+            Err(e) => test.fail(e.message())
+            Ok(t)  =>
+                match pasetoken.decrypt(t, local_key_of(r), policy(), pasclaims.implicit("other"), now())
+                    Ok(_)  => test.fail("a different implicit assertion opened the token")
+                    Err(e) => test.assert(paserr.is_authentication_failure(e))
+        match pasetoken.decode(tampered(r[5]))
+            Err(_) => test.assert(true)
+            Ok(t)  =>
+                match pasetoken.decrypt(t, local_key_of(r), policy(), implicit_of_row(r), now())
+                    Ok(_)  => test.fail("a changed byte opened the token")
+                    Err(e) => test.assert(paserr.is_authentication_failure(e))
+        i = i + 1
+
+@test
+fn test_sign_reproduces_every_public_token() [io]
+    var i = 0
+    for r in public_rows()
+        test.case("row ${i}")
+        match paskey.secret_key(bytes.to_byte_list(hex(r[0])))
+            Err(e) => test.fail(e.message())
+            Ok(sk) =>
+                test.assert_eq_str(bytes.to_hex(bytes.from_byte_list(paskey.public_key_bytes(paskey.public_key_of(sk)))),
+                    r[1])
+                match pasetoken.sign(sk, text(r[2]), footer_of_row(r), implicit_of_row(r))
+                    Ok(s)  => test.assert_eq_str(s, r[5])
+                    Err(e) => test.fail(e.message())
+        i = i + 1
+
+@test
+fn test_verify_accepts_every_public_token_and_refuses_a_change() [io]
+    var i = 0
+    for r in public_rows()
+        test.case("row ${i}")
+        match paskey.public_key(bytes.to_byte_list(hex(r[1])))
+            Err(e) => test.fail(e.message())
+            Ok(pk) =>
+                match pasetoken.decode(r[5])
+                    Err(e) => test.fail(e.message())
+                    Ok(t)  =>
+                        match pasetoken.dangerous_unverified_payload_json(t)
+                            Ok(s)  => test.assert_eq_str(s, text(r[2]))
+                            Err(e) => test.fail(e.message())
+                        match pasetoken.verify(t, pk, policy(), implicit_of_row(r), now())
+                            Ok(v)  =>
+                                test.assert_eq_str(r[6], "ok")
+                                test.assert_eq_str(pasclaims.payload_json(pasetoken.claims_of(v)), text(r[2]))
+                            Err(e) =>
+                                test.assert_eq_str(r[6], "plain")
+                                test.assert(not paserr.is_authentication_failure(e))
+                        match pasetoken.verify(t, pk, policy(), pasclaims.implicit("other"), now())
+                            Ok(_)  => test.fail("a different implicit assertion verified")
+                            Err(e) => test.assert(paserr.is_authentication_failure(e))
+                match pasetoken.decode(tampered(r[5]))
+                    Err(_) => test.assert(true)
+                    Ok(t)  =>
+                        match pasetoken.verify(t, pk, policy(), implicit_of_row(r), now())
+                            Ok(_)  => test.fail("a changed byte verified")
+                            Err(e) => test.assert(paserr.is_authentication_failure(e))
+        i = i + 1
+
+@test
+fn test_another_public_key_does_not_verify() [io]
+    let rs = public_rows()
+    match paskey.public_key(bytes.to_byte_list(hex(rs[0][1])))
+        Err(e) => test.fail(e.message())
+        Ok(pk) =>
+            match pasetoken.decode(rs[1][5])
+                Err(e) => test.fail(e.message())
+                Ok(t)  =>
+                    match pasetoken.verify(t, pk, policy(), implicit_of_row(rs[1]), now())
+                        Ok(_)  => test.fail("a token verified under another key")
+                        Err(e) => test.assert(paserr.is_authentication_failure(e))
+
+@test
+fn test_paserk_strings_and_identifiers_match_the_reference() [io]
+    var i = 0
+    for r in paserk_rows()
+        test.case("row ${i}: ${r[0]}")
+        if r[0] == "local"
+            match paskey.local_key(hex(r[1]))
+                Err(e) => test.fail(e.message())
+                Ok(k)  =>
+                    test.assert_eq_str(paserk.local_to_string(k), r[2])
+                    test.assert_eq_str(paserk.local_id(k), r[3])
+                    test.assert(paserk.local_id_matches(k, r[3]))
+                    match paserk.local_from_string(r[2])
+                        Ok(back) => test.assert_eq_str(bytes.to_hex(paskey.local_key_bytes(back)), r[1])
+                        Err(e)   => test.fail(e.message())
+        else if r[0] == "public"
+            match paskey.public_key(bytes.to_byte_list(hex(r[1])))
+                Err(e) => test.fail(e.message())
+                Ok(k)  =>
+                    test.assert_eq_str(paserk.public_to_string(k), r[2])
+                    test.assert_eq_str(paserk.public_id(k), r[3])
+                    test.assert(paserk.public_id_matches(k, r[3]))
+                    match paserk.public_from_string(r[2])
+                        Ok(back) => test.assert_eq_str(bytes.to_hex(bytes.from_byte_list(paskey.public_key_bytes(back))), r[1])
+                        Err(e)   => test.fail(e.message())
+        else
+            match paskey.secret_key(bytes.to_byte_list(hex(r[1])))
+                Err(e) => test.fail(e.message())
+                Ok(k)  =>
+                    test.assert_eq_str(paserk.secret_to_string(k), r[2])
+                    test.assert_eq_str(paserk.secret_id(k), r[3])
+                    match paserk.secret_from_string(r[2])
+                        Ok(back) => test.assert_eq_str(paserk.secret_to_string(back), r[2])
+                        Err(e)   => test.fail(e.message())
+        i = i + 1

@@ -1,0 +1,519 @@
+// paseto_edge_tests.nv — the refusals, the policy outcomes and the accessors,
+// so that each line of src/ is reached and each answer is pinned.  The tokens
+// themselves are in generated_vectors_tests.nv, and the published token of
+// PASETO test vector 4-S-1 is checked below.
+
+use std.bytes
+use std.list
+use std.str
+use std.test
+use paserr
+use paserk
+use pasclaims
+use paskey
+use paspae
+use paspolicy
+use pasetoken
+
+fn hex(s: Str) -> Bytes
+    bytes.from_hex(s) ?? bytes.zeros(0)
+
+fn key_hex() -> Str
+    "0707070707070707070707070707070707070707070707070707070707070707"
+
+fn base_policy() -> PasPolicy
+    paspolicy.requiring(paspolicy.strict(), "I", "A")
+
+fn good() -> Str
+    "{\"iss\":\"I\",\"aud\":\"A\",\"exp\":\"2039-01-01T00:00:00+00:00\"}"
+
+// "ok", or the message of the first refusal, for a claims payload
+// sealed under the key above and opened under `pol` at `now`.
+fn opened(json: Str, pol: PasPolicy, now: Int) -> Str
+    match paskey.local_key(hex(key_hex()))
+        Err(e) => e.message()
+        Ok(k)  =>
+            match pasetoken.encrypt(k, json, pasclaims.no_footer(), pasclaims.no_implicit(), bytes.zeros(32))
+                Err(e)  => e.message()
+                Ok(tok) =>
+                    match pasetoken.decode(tok)
+                        Err(e) => e.message()
+                        Ok(t)  =>
+                            match pasetoken.decrypt(t, k, pol, pasclaims.no_implicit(), pasclaims.instant(now))
+                                Ok(_)  => "ok"
+                                Err(e) => e.message()
+
+fn decode_text(token: Str) -> Str
+    match pasetoken.decode(token)
+        Ok(_)  => "ok"
+        Err(e) => e.message()
+
+fn long_payload() -> Str
+    "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghij"
+
+// ── paserr ───────────────────────────────────────────────────────────
+
+@test
+fn test_every_error_has_its_sentence() [io]
+    test.assert_eq_str(paserr.describe(PasUnknownPrefix("v2.local.")),
+        "the token starts with v2.local., which is not v4.local. or v4.public.")
+    test.assert_eq_str(paserr.describe(PasBadPartCount(2)), "the token has 2 parts, want 3 or 4")
+    test.assert_eq_str(paserr.describe(PasBadBase64("footer", 7)),
+        "the footer is not base64url without padding, at offset 7")
+    test.assert_eq_str(paserr.describe(PasPayloadTooShort(30, 64)), "the payload is 30 bytes, want at least 64")
+    test.assert_eq_str(paserr.describe(PasKeyLengthWrong(16, 32)), "the key is 16 bytes, want 32")
+    test.assert_eq_str(paserr.describe(PasPurposeMismatch("public", "local")),
+        "a local key cannot open a public token")
+    test.assert_eq_str(paserr.describe(PasBadMac), "the MAC does not match")
+    test.assert_eq_str(paserr.describe(PasBadSignature), "the signature does not verify")
+    test.assert_eq_str(paserr.describe(PasBadClaims("exp")), "the claim exp is not what the specification gives it")
+    test.assert_eq_str(paserr.describe(PasBadTimestamp("nbf", 4)),
+        "the claim nbf is not an RFC 3339 timestamp, at offset 4")
+    test.assert_eq_str(paserr.describe(PasExpired(1000, 2000)), "the token expired at 1000, it is now 2000")
+    test.assert_eq_str(paserr.describe(PasNotYetValid(3000, 2000)),
+        "the token is not valid before 3000, it is now 2000")
+    test.assert_eq_str(paserr.describe(PasClaimMissing("aud")), "the claim aud is required and absent")
+    test.assert_eq_str(paserr.describe(PasClaimMismatch("aud", "api", "web")), "the claim aud is web, want api")
+    test.assert_eq_str(paserr.describe(PasPolicyUnusable("issuer")), "the policy is unusable: issuer")
+    test.assert_eq_str(paserr.describe(PasUnknownPaserkType("k4.seal.")),
+        "the PASERK type k4.seal. is not one this package reads")
+    test.assert_eq_str(paserr.describe(PasBadPaserkData("local", 5, 32)), "the local key data is 5 bytes, want 32")
+    test.assert_eq_str(paserr.describe(PasOutputTooSmall(8, 7)), "the output buffer has 7 bytes, want 8")
+    test.assert_eq_str(paserr.describe(PasPaeTooLong(9)), "a piece of 9 bytes is longer than the encoding can name")
+
+@test
+fn test_the_predicates_classify_every_kind_of_error() [io]
+    test.assert(paserr.is_authentication_failure(PasBadMac))
+    test.assert(paserr.is_authentication_failure(PasBadSignature))
+    test.assert(not paserr.is_authentication_failure(PasNotYetValid(1, 0)))
+    test.assert(paserr.is_policy_refusal(PasExpired(1, 2)))
+    test.assert(paserr.is_policy_refusal(PasNotYetValid(2, 1)))
+    test.assert(paserr.is_policy_refusal(PasClaimMissing("x")))
+    test.assert(paserr.is_policy_refusal(PasClaimMismatch("x", "a", "b")))
+    test.assert(not paserr.is_policy_refusal(PasBadSignature))
+    test.assert(not paserr.is_policy_refusal(PasBadClaims("x")))
+
+// ── paspae ───────────────────────────────────────────────────────────
+
+@test
+fn test_pae_writes_little_endian_on_a_big_endian_cursor_too() [io]
+    var c = bytes.cursor_be(bytes.zeros(paspae.encode_len([bytes.from_str("ab")])))
+    match paspae.encode_into([bytes.from_str("ab")], var c)
+        Ok(n)  =>
+            test.assert_eq(n, 18)
+            test.assert_eq_str(bytes.to_hex(c.finish()), "0100000000000000020000000000000061" + "62")
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_a_length_field_in_a_short_buffer_is_extended_and_the_top_bit_is_cleared() [io]
+    test.assert_eq_str(bytes.to_hex(paspae.length_field(1, bytes.zeros(2))), "0100000000000000")
+    test.assert_eq_str(bytes.to_hex(paspae.length_field(-1, bytes.zeros(8))), "ffffffffffffff7f")
+    test.assert_eq_str(bytes.to_hex(paspae.length_field(5, hex("ffffffffffffffffaa"))), "0500000000000000aa")
+
+// ── paskey ───────────────────────────────────────────────────────────
+
+@test
+fn test_prefix_refusals_quote_what_they_found() [io]
+    test.case("three or more parts: up to the last dot")
+    match paskey.parse_prefix("v2.local.abcdef")
+        Ok(_)  => test.fail("v2")
+        Err(e) => test.assert_eq_str(e.message(), "the token starts with v2.local., which is not v4.local. or v4.public.")
+    test.case("fewer parts and short: the whole token")
+    match paskey.parse_prefix("hello")
+        Ok(_)  => test.fail("hello")
+        Err(e) => test.assert_eq_str(e.message(), "the token starts with hello, which is not v4.local. or v4.public.")
+    test.case("fewer parts and long: 24 characters")
+    match paskey.parse_prefix("abcdefghijklmnopqrstuvwxyz0123456789")
+        Ok(_)  => test.fail("long")
+        Err(e) => test.assert_eq_str(e.message(),
+            "the token starts with abcdefghijklmnopqrstuvwx, which is not v4.local. or v4.public.")
+
+@test
+fn test_keys_of_the_wrong_width_are_refused_by_name() [io]
+    match paskey.secret_key(list.zeros(31))
+        Ok(_)  => test.fail("31")
+        Err(e) => test.assert_eq_str(e.message(), "the key is 31 bytes, want 32")
+    match paskey.public_key(list.zeros(33))
+        Ok(_)  => test.fail("33")
+        Err(e) => test.assert_eq_str(e.message(), "the key is 33 bytes, want 32")
+    match paskey.local_key(bytes.zeros(33))
+        Ok(_)  => test.fail("33")
+        Err(e) => test.assert_eq_str(e.message(), "the key is 33 bytes, want 32")
+
+@test
+fn test_a_local_key_hands_back_its_bytes_and_a_copy() [io]
+    match paskey.local_key(hex(key_hex()))
+        Ok(k)  => test.assert_eq_str(bytes.to_hex(paskey.local_key_bytes(k)), key_hex())
+        Err(e) => test.fail(e.message())
+
+// ── pasclaims ────────────────────────────────────────────────────────
+
+@test
+fn test_timestamps_with_an_offset_are_moved_to_utc() [io]
+    test.case("the published vector's timestamp")
+    match pasclaims.parse_timestamp("exp", "2022-01-01T00:00:00+00:00")
+        Ok(t)  => test.assert_eq(pasclaims.unix_seconds(t), 1640995200)
+        Err(e) => test.fail(e.message())
+    test.case("a Z suffix")
+    match pasclaims.parse_timestamp("exp", "2022-01-01T00:00:00Z")
+        Ok(t)  => test.assert_eq(pasclaims.unix_seconds(t), 1640995200)
+        Err(e) => test.fail(e.message())
+    test.case("an offset of two hours is two hours earlier in UTC")
+    match pasclaims.parse_timestamp("nbf", "2026-03-15T11:30:00+02:00")
+        Ok(t)  => test.assert_eq(pasclaims.unix_seconds(t), 1773567000)
+        Err(e) => test.fail(e.message())
+    test.case("before the epoch")
+    match pasclaims.parse_timestamp("iat", "1969-12-31T23:59:59Z")
+        Ok(t)  => test.assert_eq(pasclaims.unix_seconds(t), -1)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_a_malformed_timestamp_names_the_claim() [io]
+    match pasclaims.parse_timestamp("iat", "2022-01-01")
+        Ok(_)  => test.fail("a date is not a timestamp")
+        Err(e) =>
+            match e
+                PasBadTimestamp(claim, at) =>
+                    test.assert_eq_str(claim, "iat")
+                    test.assert(at >= 0)
+                _                          => test.fail("wrong error")
+
+@test
+fn test_instants_are_shown_as_utc_civil_times_and_text() [io]
+    test.assert_eq_str(pasclaims.format_timestamp(pasclaims.instant(1640995200)), "2022-01-01T00:00:00+00:00")
+    test.assert_eq_str(pasclaims.format_timestamp(pasclaims.instant(1773567000)), "2026-03-15T09:30:00+00:00")
+    test.case("before the epoch the day is the previous one")
+    test.assert_eq_str(pasclaims.format_timestamp(pasclaims.instant(-1)), "1969-12-31T23:59:59+00:00")
+    test.assert_eq_str(pasclaims.format_timestamp(pasclaims.instant(-86400)), "1969-12-31T00:00:00+00:00")
+    let dt = pasclaims.civil_of(pasclaims.instant(1640995200 + 3661))
+    test.assert_eq(dt.time.hour, 1)
+    test.assert_eq(dt.time.minute, 1)
+    test.assert_eq(dt.time.second, 1)
+
+@test
+fn test_claims_are_read_off_a_payload_and_a_wrong_type_is_refused_by_name() [io]
+    match pasclaims.parse("{\"iss\":\"i\",\"sub\":\"s\",\"aud\":\"a\",\"jti\":\"j\",\"exp\":\"2022-01-01T00:00:00+00:00\",\"nbf\":\"2021-01-01T00:00:00+00:00\",\"iat\":\"2020-01-01T00:00:00+00:00\",\"other\":[1]}")
+        Err(e) => test.fail(e.message())
+        Ok(c)  =>
+            test.assert_eq_str(pasclaims.issuer(c), "i")
+            test.assert_eq_str(pasclaims.subject(c), "s")
+            test.assert_eq_str(pasclaims.audience(c), "a")
+            test.assert_eq_str(pasclaims.token_id(c), "j")
+            test.assert_eq(pasclaims.unix_seconds(pasclaims.expiration(c) ?? pasclaims.instant(0)), 1640995200)
+            test.assert_eq(pasclaims.unix_seconds(pasclaims.not_before(c) ?? pasclaims.instant(0)), 1609459200)
+            test.assert_eq(pasclaims.unix_seconds(pasclaims.issued_at(c) ?? pasclaims.instant(0)), 1577836800)
+    for claim in ["iss", "sub", "aud", "jti", "exp", "nbf", "iat"]
+        test.case("${claim} as a number")
+        match pasclaims.parse("{\"${claim}\":5}")
+            Ok(_)  => test.fail("a number is not what the specification gives ${claim}")
+            Err(e) => test.assert_eq_str(e.message(), "the claim ${claim} is not what the specification gives it")
+    test.case("not JSON at all, and JSON that is not an object")
+    match pasclaims.parse("nope")
+        Ok(_)  => test.fail("text")
+        Err(e) => test.assert_eq_str(e.message(), "the claim payload is not what the specification gives it")
+    match pasclaims.parse("[1]")
+        Ok(_)  => test.fail("array")
+        Err(e) => test.assert_eq_str(e.message(), "the claim payload is not what the specification gives it")
+    test.case("a timestamp that is a string but not a timestamp carries its offset")
+    match pasclaims.parse("{\"exp\":\"tomorrow\"}")
+        Ok(_)  => test.fail("tomorrow")
+        Err(e) => test.assert(str.starts_with(e.message(), "the claim exp is not an RFC 3339 timestamp"))
+
+// ── paspolicy ────────────────────────────────────────────────────────
+
+@test
+fn test_an_unusable_policy_names_the_field() [io]
+    match paspolicy.check(paspolicy.requiring(paspolicy.strict(), "I", ""))
+        Ok(_)  => test.fail("no audience")
+        Err(e) => test.assert_eq_str(e.message(),
+            "the policy is unusable: no audience is named, so every token would be refused")
+    match paspolicy.check(paspolicy.strict())
+        Ok(_)  => test.fail("no issuer")
+        Err(e) => test.assert_eq_str(e.message(), "the policy is unusable: no issuer is named, so every token would be refused")
+    match paspolicy.check(paspolicy.with_leeway(base_policy(), -1))
+        Ok(_)  => test.fail("negative leeway")
+        Err(e) => test.assert_eq_str(e.message(),
+            "the policy is unusable: the leeway is negative, so a token would expire before it was issued")
+    match paspolicy.check(base_policy())
+        Ok(ok) => test.assert(ok)
+        Err(e) => test.fail(e.message())
+    test.assert_eq_str(paspolicy.issuer(base_policy()), "I")
+    test.assert_eq_str(paspolicy.audience(base_policy()), "A")
+
+// ── the policy, through decrypt ──────────────────────────────────────
+
+@test
+fn test_a_good_token_is_accepted_and_the_policy_is_applied_to_it() [io]
+    test.assert_eq_str(opened(good(), base_policy(), 1), "ok")
+    test.case("on or after exp is expired, and leeway moves the line")
+    test.assert_eq_str(opened(good(), base_policy(), 2177452800),
+        "the token expired at 2177452800, it is now 2177452800")
+    test.assert_eq_str(opened(good(), base_policy(), 2177452799), "ok")
+    let loose = paspolicy.with_leeway(base_policy(), 10)
+    test.assert_eq_str(opened(good(), loose, 2177452809), "ok")
+    test.assert_eq_str(opened(good(), loose, 2177452810), "the token expired at 2177452800, it is now 2177452810")
+    test.case("an absent exp is refused unless the policy allows it")
+    let no_exp = "{\"iss\":\"I\",\"aud\":\"A\"}"
+    test.assert_eq_str(opened(no_exp, base_policy(), 1), "the claim exp is required and absent")
+    test.assert_eq_str(opened(no_exp, paspolicy.allowing_no_expiration(base_policy()), 1), "ok")
+
+@test
+fn test_not_before_issued_at_and_subject() [io]
+    let nbf = "{\"iss\":\"I\",\"aud\":\"A\",\"exp\":\"2040-01-01T00:00:00+00:00\",\"nbf\":\"2039-01-01T00:00:00+00:00\"}"
+    test.assert_eq_str(opened(nbf, base_policy(), 100), "the token is not valid before 2177452800, it is now 100")
+    test.assert_eq_str(opened(nbf, base_policy(), 2177452800), "ok")
+    test.assert_eq_str(opened(nbf, paspolicy.with_leeway(base_policy(), 100), 2177452750), "ok")
+    test.assert_eq_str(opened(nbf, paspolicy.with_leeway(base_policy(), 100), 2177452699),
+        "the token is not valid before 2177452800, it is now 2177452699")
+    test.case("required and absent")
+    test.assert_eq_str(opened(good(), paspolicy.requiring_not_before(base_policy()), 1),
+        "the claim nbf is required and absent")
+    test.assert_eq_str(opened(good(), paspolicy.requiring_issued_at(base_policy()), 1),
+        "the claim iat is required and absent")
+    test.assert_eq_str(opened(good(), paspolicy.requiring_subject(base_policy()), 1),
+        "the claim sub is required and absent")
+    test.case("required and present")
+    let all = "{\"iss\":\"I\",\"aud\":\"A\",\"sub\":\"u\",\"exp\":\"2040-01-01T00:00:00+00:00\",\"nbf\":\"2039-01-01T00:00:00+00:00\",\"iat\":\"2038-01-01T00:00:00+00:00\"}"
+    let strict_all = paspolicy.requiring_subject(paspolicy.requiring_issued_at(paspolicy.requiring_not_before(base_policy())))
+    test.assert_eq_str(opened(all, strict_all, 2177452800), "ok")
+
+@test
+fn test_issuer_and_audience_must_be_present_and_equal() [io]
+    test.assert_eq_str(opened("{\"aud\":\"A\",\"exp\":\"2039-01-01T00:00:00+00:00\"}", base_policy(), 1),
+        "the claim iss is required and absent")
+    test.assert_eq_str(opened("{\"iss\":\"Z\",\"aud\":\"A\",\"exp\":\"2039-01-01T00:00:00+00:00\"}", base_policy(), 1),
+        "the claim iss is Z, want I")
+    test.assert_eq_str(opened("{\"iss\":\"I\",\"exp\":\"2039-01-01T00:00:00+00:00\"}", base_policy(), 1),
+        "the claim aud is required and absent")
+    test.assert_eq_str(opened("{\"iss\":\"I\",\"aud\":\"W\",\"exp\":\"2039-01-01T00:00:00+00:00\"}", base_policy(), 1),
+        "the claim aud is W, want A")
+
+@test
+fn test_an_unusable_policy_or_a_bad_payload_is_refused_after_the_mac_passes() [io]
+    test.assert_eq_str(opened(good(), paspolicy.strict(), 1),
+        "the policy is unusable: no issuer is named, so every token would be refused")
+    test.assert_eq_str(opened("[]", base_policy(), 1), "the claim payload is not what the specification gives it")
+    test.assert_eq_str(opened("", base_policy(), 1), "the claim payload is not what the specification gives it")
+
+// ── pasetoken ────────────────────────────────────────────────────────
+
+@test
+fn test_decode_refuses_each_malformed_part() [io]
+    test.assert_eq_str(decode_text("v4.local"), "the token has 2 parts, want 3 or 4")
+    test.assert_eq_str(decode_text("v4.local.a.b.c"), "the token has 5 parts, want 3 or 4")
+    test.assert_eq_str(decode_text("v3.public.${long_payload()}"),
+        "the token starts with v3.public., which is not v4.local. or v4.public.")
+    test.case("padding, a bad character and a bad length")
+    test.assert_eq_str(decode_text("v4.local.${long_payload()}=="),
+        "the payload is not base64url without padding, at offset 88")
+    test.assert_eq_str(decode_text("v4.local.${long_payload()}*"),
+        "the payload is not base64url without padding, at offset 88")
+    test.assert(str.starts_with(decode_text("v4.local.${long_payload()}a"), "the payload is not base64url without padding"))
+    test.case("a payload shorter than the fixed fields")
+    test.assert_eq_str(decode_text("v4.local.abcd"), "the payload is 3 bytes, want at least 64")
+    test.assert_eq_str(decode_text("v4.public."), "the payload is 0 bytes, want at least 64")
+    test.case("a bad footer")
+    test.assert_eq_str(decode_text("v4.local.${long_payload()}.a*"),
+        "the footer is not base64url without padding, at offset 1")
+    test.assert_eq_str(decode_text("v4.local.${long_payload()}.YQ"), "ok")
+
+@test
+fn test_accessors_on_a_decoded_token() [io]
+    match pasetoken.decode("v4.public.${long_payload()}.eyJraWQiOiJrMSJ9")
+        Err(e) => test.fail(e.message())
+        Ok(t)  =>
+            test.assert_eq_str(pasetoken.prefix_of(t), "v4.public.")
+            test.assert_eq_str(paskey.purpose_name(pasetoken.purpose_of(t)), "public")
+            test.assert_eq_str(paskey.version_name(pasetoken.version_of(t)), "v4")
+            test.assert(pasetoken.has_footer(t))
+            test.assert_eq_str(pasclaims.footer_text(pasetoken.unverified_footer(t)), "{\"kid\":\"k1\"}")
+
+@test
+fn test_the_wrong_kind_of_key_is_a_named_refusal_both_ways() [io]
+    match paskey.public_key(list.zeros(32))
+        Err(e) => test.fail(e.message())
+        Ok(pk) =>
+            match pasetoken.decode("v4.local.${long_payload()}")
+                Err(e) => test.fail(e.message())
+                Ok(t)  =>
+                    match pasetoken.verify(t, pk, base_policy(), pasclaims.no_implicit(), pasclaims.instant(0))
+                        Ok(_)  => test.fail("a public key opened a local token")
+                        Err(e) => test.assert_eq_str(e.message(), "a public key cannot open a local token")
+                    match pasetoken.dangerous_unverified_payload_json(t)
+                        Ok(_)  => test.fail("a local payload is encrypted")
+                        Err(e) => test.assert_eq_str(e.message(), "a public key cannot open a local token")
+    match paskey.local_key(hex(key_hex()))
+        Err(e) => test.fail(e.message())
+        Ok(k)  =>
+            match pasetoken.decode("v4.public.${long_payload()}")
+                Err(e) => test.fail(e.message())
+                Ok(t)  =>
+                    match pasetoken.decrypt(t, k, base_policy(), pasclaims.no_implicit(), pasclaims.instant(0))
+                        Ok(_)  => test.fail("a local key opened a public token")
+                        Err(e) => test.assert_eq_str(e.message(), "a local key cannot open a public token")
+
+@test
+fn test_a_nonce_of_the_wrong_width_is_refused_and_a_footer_is_written_after_the_payload() [io]
+    match paskey.local_key(hex(key_hex()))
+        Err(e) => test.fail(e.message())
+        Ok(k)  =>
+            match pasetoken.encrypt(k, "{}", pasclaims.no_footer(), pasclaims.no_implicit(), bytes.zeros(31))
+                Ok(_)  => test.fail("31")
+                Err(e) => test.assert_eq_str(e.message(), "the key is 31 bytes, want 32")
+            match pasetoken.encrypt(k, "{}", pasclaims.footer("f"), pasclaims.no_implicit(), bytes.zeros(32))
+                Err(e) => test.fail(e.message())
+                Ok(s)  =>
+                    test.assert(str.starts_with(s, "v4.local."))
+                    test.assert(str.ends_with(s, ".Zg"))
+
+// The published token of PASETO test vector 4-S-1.
+fn vector_4_s_1() -> Str
+    "v4.public.eyJkYXRhIjoidGhpcyBpcyBhIHNpZ25lZCBtZXNzYWdlIiwiZXhwIjoiMjAyMi0wMS0wMVQwMDowMDowMCswMDowMCJ9bg_XBBzds8lTZShVlwwKSgeKpLT3yukTw6JUz3W4h_ExsQV-P0V54zemZDcAxFaSeef1QlXEFtkqxT1ciiQEDA"
+
+@test
+fn test_the_published_vector_4_s_1_is_reproduced_and_verified() [io]
+    let seed = hex("b4cbfb43df4ce210727d953e4a713307fa19bb7d9f85041438d9e11b942a3774")
+    match paskey.secret_key(bytes.to_byte_list(seed))
+        Err(e) => test.fail(e.message())
+        Ok(sk) =>
+            test.assert_eq_str(bytes.to_hex(bytes.from_byte_list(paskey.public_key_bytes(paskey.public_key_of(sk)))),
+                               "1eb9dbbbbc047c03fd70604e0071f0987e16b28b757225c11f00415d0e20b1a2")
+            match pasetoken.sign(sk, "{\"data\":\"this is a signed message\",\"exp\":\"2022-01-01T00:00:00+00:00\"}",
+                                 pasclaims.no_footer(), pasclaims.no_implicit())
+                Ok(s)  => test.assert_eq_str(s, vector_4_s_1())
+                Err(e) => test.fail(e.message())
+            match pasetoken.decode(vector_4_s_1())
+                Err(e) => test.fail(e.message())
+                Ok(t)  =>
+                    match pasetoken.verify(t,
+                        paskey.public_key_of(sk),
+                        base_policy(),
+                        pasclaims.no_implicit(),
+                        pasclaims.instant(0))
+                        Ok(_)  => test.fail("the vector has no issuer")
+                        Err(e) => test.assert_eq_str(e.message(), "the claim iss is required and absent")
+
+@test
+fn test_a_small_order_public_key_never_verifies() [io]
+    match paskey.public_key(list.zeros(32))
+        Err(e) => test.fail(e.message())
+        Ok(pk) =>
+            match pasetoken.decode(vector_4_s_1())
+                Err(e) => test.fail(e.message())
+                Ok(t)  =>
+                    match pasetoken.verify(t, pk, base_policy(), pasclaims.no_implicit(), pasclaims.instant(0))
+                        Ok(_)  => test.fail("a small-order key verified")
+                        Err(e) => test.assert_eq_str(e.message(), "the signature does not verify")
+
+@test
+fn test_the_pre_authentication_bytes_of_a_short_local_payload_split_at_the_end() [io]
+    match pasetoken.pre_auth(PasV4, PasLocal, bytes.from_str("abc"), pasclaims.no_footer(), pasclaims.no_implicit())
+        Err(e) => test.fail(e.message())
+        Ok(b)  =>
+            match paspae.encode([bytes.from_str("v4.local."),
+                bytes.from_str("abc"),
+                bytes.zeros(0),
+                bytes.zeros(0),
+                bytes.zeros(0)])
+                Ok(want) => test.assert_eq_str(bytes.to_hex(b), bytes.to_hex(want))
+                Err(e)   => test.fail(e.message())
+
+// ── paserk ───────────────────────────────────────────────────────────
+
+@test
+fn test_every_paserk_type_is_read_and_unknown_ones_are_quoted() [io]
+    for s in ["k4.local.x", "k4.public.x", "k4.secret.x", "k4.lid.x", "k4.pid.x", "k4.sid.x"]
+        match paserk.type_of(s)
+            Ok(t)  => test.assert(str.starts_with(s, paserk.type_prefix(t)))
+            Err(e) => test.fail(e.message())
+    match paserk.type_of("k4.local-wrap.pie.abc")
+        Ok(_)  => test.fail("wrap")
+        Err(e) => test.assert_eq_str(e.message(), "the PASERK type k4.local-wrap.pie. is not one this package reads")
+    match paserk.type_of("short")
+        Ok(_)  => test.fail("short")
+        Err(e) => test.assert_eq_str(e.message(), "the PASERK type short is not one this package reads")
+    match paserk.type_of("abcdefghijklmnopqrstuvwxyz0123456789")
+        Ok(_)  => test.fail("long")
+        Err(e) => test.assert_eq_str(e.message(), "the PASERK type abcdefghijklmnopqrstuvwx is not one this package reads")
+
+@test
+fn test_a_paserk_string_of_another_type_is_a_purpose_mismatch() [io]
+    match paserk.local_from_string("k4.public.AAAA")
+        Ok(_)  => test.fail("public as local")
+        Err(e) => test.assert_eq_str(e.message(), "a local key cannot open a k4.public. token")
+    match paserk.public_from_string("k4.local.AAAA")
+        Ok(_)  => test.fail("local as public")
+        Err(e) => test.assert_eq_str(e.message(), "a public key cannot open a k4.local. token")
+    match paserk.secret_from_string("k4.sid.AAAA")
+        Ok(_)  => test.fail("sid as secret")
+        Err(e) => test.assert_eq_str(e.message(), "a secret key cannot open a k4.sid. token")
+    match paserk.local_from_string("nothing")
+        Ok(_)  => test.fail("nothing")
+        Err(e) => test.assert_eq_str(e.message(), "the PASERK type nothing is not one this package reads")
+
+@test
+fn test_bad_data_in_a_paserk_string_is_named() [io]
+    match paserk.local_from_string("k4.local.AAAA")
+        Ok(_)  => test.fail("3 bytes")
+        Err(e) => test.assert_eq_str(e.message(), "the local key data is 3 bytes, want 32")
+    match paserk.public_from_string("k4.public.AAAA")
+        Ok(_)  => test.fail("3 bytes")
+        Err(e) => test.assert_eq_str(e.message(), "the public key data is 3 bytes, want 32")
+    match paserk.secret_from_string("k4.secret.AAAA")
+        Ok(_)  => test.fail("3 bytes")
+        Err(e) => test.assert_eq_str(e.message(), "the secret key data is 3 bytes, want 64")
+    match paserk.local_from_string("k4.local.A*AA")
+        Ok(_)  => test.fail("character")
+        Err(e) => test.assert(str.starts_with(e.message(), "the key is not base64url without padding"))
+
+@test
+fn test_identifiers_do_not_match_other_keys_or_other_text() [io]
+    match paskey.local_key(hex(key_hex()))
+        Err(e) => test.fail(e.message())
+        Ok(k)  =>
+            test.assert(paserk.local_id_matches(k, paserk.local_id(k)))
+            test.assert(not paserk.local_id_matches(k, "k4.lid.nope"))
+            test.assert(str.starts_with(paserk.local_id(k), "k4.lid."))
+            test.assert_eq(str.len(paserk.local_id(k)), 7 + 44)
+
+@test
+fn test_base64_refusals_name_the_offset_of_the_fault() [io]
+    test.case("a length of one more than a multiple of four names the length")
+    test.assert_eq_str(decode_text("v4.local.${long_payload()}a"),
+        "the payload is not base64url without padding, at offset 89")
+    test.case("a last character with bits set past the data names its own offset")
+    test.assert_eq_str(decode_text("v4.local.${str.slice(long_payload(), 0, 86)}b"),
+        "the payload is not base64url without padding, at offset 86")
+    test.case("the same in a PASERK string")
+    match paserk.local_from_string("k4.local.A")
+        Ok(_)  => test.fail("one character")
+        Err(e) => test.assert_eq_str(e.message(), "the key is not base64url without padding, at offset 1")
+    match paserk.local_from_string("k4.local.AB")
+        Ok(_)  => test.fail("non-canonical")
+        Err(e) => test.assert_eq_str(e.message(), "the key is not base64url without padding, at offset 1")
+    match paserk.local_from_string("k4.local.AAA=")
+        Ok(_)  => test.fail("padding")
+        Err(e) => test.assert_eq_str(e.message(), "the key is not base64url without padding, at offset 3")
+
+@test
+fn test_identifier_strings_cannot_stand_in_for_keys() [io]
+    match paserk.local_from_string("k4.lid.AAAA")
+        Ok(_)  => test.fail("lid as local")
+        Err(e) => test.assert_eq_str(e.message(), "a local key cannot open a k4.lid. token")
+    match paserk.public_from_string("k4.pid.AAAA")
+        Ok(_)  => test.fail("pid as public")
+        Err(e) => test.assert_eq_str(e.message(), "a public key cannot open a k4.pid. token")
+
+@test
+fn test_a_secret_key_string_whose_public_half_is_not_the_seeds_is_refused() [io]
+    match paskey.secret_key(list.zeros(32))
+        Err(e) => test.fail(e.message())
+        Ok(sk) =>
+            let s = paserk.secret_to_string(sk)
+            test.assert_eq_str(s,
+                "k4.secret." + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" + str.slice(s, 53, str.len(s)))
+            let bad = str.slice(s, 0, 10) + "B" + str.slice(s, 11, str.len(s))
+            match paserk.secret_from_string(bad)
+                Ok(_)  => test.fail("a mismatched pair loaded")
+                Err(e) => test.assert_eq_str(e.message(),
+                    "the secret (the public half is not the seed's) key data is 64 bytes, want 64")

@@ -1,0 +1,180 @@
+// ── The rows through the package ─────────────────────────────────────
+
+fn policy() -> PasPolicy
+    paspolicy.requiring(paspolicy.strict(), "https://auth.example", "api")
+
+fn now() -> PasInstant
+    pasclaims.instant(1800000000)
+
+fn text(s: Str) -> Str
+    bytes.to_str(hex(s))
+
+fn footer_of_row(r: [Str]) -> PasFooter
+    if r[3] == ""
+        pasclaims.no_footer()
+    else
+        pasclaims.footer(text(r[3]))
+
+fn implicit_of_row(r: [Str]) -> PasImplicit
+    if r[4] == ""
+        pasclaims.no_implicit()
+    else
+        pasclaims.implicit(text(r[4]))
+
+fn local_key_of(r: [Str]) -> PasLocalKey
+    match paskey.local_key(hex(r[0]))
+        Ok(k)  => k
+        Err(_) => paskey.local_key(bytes.zeros(32))!
+
+// Flip one character in the middle of the payload to another valid one.
+fn tampered(token: Str) -> Str
+    let at = 40
+    let c = str.slice(token, at, at + 1)
+    let d = if c == "A"
+        "B"
+    else
+        "A"
+    str.slice(token, 0, at) + d + str.slice(token, at + 1, str.len(token))
+
+@test
+fn test_encrypt_reproduces_every_local_token() [io]
+    var i = 0
+    for r in local_rows()
+        test.case("row ${i}")
+        match pasetoken.encrypt(local_key_of(r), text(r[2]), footer_of_row(r), implicit_of_row(r), hex(r[1]))
+            Ok(s)  => test.assert_eq_str(s, r[5])
+            Err(e) => test.fail(e.message())
+        i = i + 1
+
+@test
+fn test_decrypt_opens_every_local_token_and_returns_what_was_sealed() [io]
+    var i = 0
+    for r in local_rows()
+        test.case("row ${i}")
+        match pasetoken.decode(r[5])
+            Err(e) => test.fail(e.message())
+            Ok(t)  =>
+                test.assert_eq_str(pasclaims.footer_text(pasetoken.unverified_footer(t)), text(r[3]))
+                match pasetoken.decrypt(t, local_key_of(r), policy(), implicit_of_row(r), now())
+                    Ok(v) =>
+                        test.assert_eq_str(r[6], "ok")
+                        test.assert_eq_str(pasclaims.payload_json(pasetoken.claims_of(v)), text(r[2]))
+                        test.assert_eq_str(pasclaims.footer_text(pasetoken.footer_of(v)), text(r[3]))
+                    Err(e) =>
+                        test.assert_eq_str(r[6], "plain")
+                        test.assert(not paserr.is_authentication_failure(e))
+        i = i + 1
+
+@test
+fn test_a_wrong_implicit_assertion_or_a_changed_byte_is_a_bad_mac_and_nothing_else() [io]
+    var i = 0
+    for r in local_rows()
+        test.case("row ${i}")
+        match pasetoken.decode(r[5])
+            Err(e) => test.fail(e.message())
+            Ok(t)  =>
+                match pasetoken.decrypt(t, local_key_of(r), policy(), pasclaims.implicit("other"), now())
+                    Ok(_)  => test.fail("a different implicit assertion opened the token")
+                    Err(e) => test.assert(paserr.is_authentication_failure(e))
+        match pasetoken.decode(tampered(r[5]))
+            Err(_) => test.assert(true)
+            Ok(t)  =>
+                match pasetoken.decrypt(t, local_key_of(r), policy(), implicit_of_row(r), now())
+                    Ok(_)  => test.fail("a changed byte opened the token")
+                    Err(e) => test.assert(paserr.is_authentication_failure(e))
+        i = i + 1
+
+@test
+fn test_sign_reproduces_every_public_token() [io]
+    var i = 0
+    for r in public_rows()
+        test.case("row ${i}")
+        match paskey.secret_key(bytes.to_byte_list(hex(r[0])))
+            Err(e) => test.fail(e.message())
+            Ok(sk) =>
+                test.assert_eq_str(bytes.to_hex(bytes.from_byte_list(paskey.public_key_bytes(paskey.public_key_of(sk)))), r[1])
+                match pasetoken.sign(sk, text(r[2]), footer_of_row(r), implicit_of_row(r))
+                    Ok(s)  => test.assert_eq_str(s, r[5])
+                    Err(e) => test.fail(e.message())
+        i = i + 1
+
+@test
+fn test_verify_accepts_every_public_token_and_refuses_a_change() [io]
+    var i = 0
+    for r in public_rows()
+        test.case("row ${i}")
+        match paskey.public_key(bytes.to_byte_list(hex(r[1])))
+            Err(e) => test.fail(e.message())
+            Ok(pk) =>
+                match pasetoken.decode(r[5])
+                    Err(e) => test.fail(e.message())
+                    Ok(t)  =>
+                        match pasetoken.dangerous_unverified_payload_json(t)
+                            Ok(s)  => test.assert_eq_str(s, text(r[2]))
+                            Err(e) => test.fail(e.message())
+                        match pasetoken.verify(t, pk, policy(), implicit_of_row(r), now())
+                            Ok(v) =>
+                                test.assert_eq_str(r[6], "ok")
+                                test.assert_eq_str(pasclaims.payload_json(pasetoken.claims_of(v)), text(r[2]))
+                            Err(e) =>
+                                test.assert_eq_str(r[6], "plain")
+                                test.assert(not paserr.is_authentication_failure(e))
+                        match pasetoken.verify(t, pk, policy(), pasclaims.implicit("other"), now())
+                            Ok(_)  => test.fail("a different implicit assertion verified")
+                            Err(e) => test.assert(paserr.is_authentication_failure(e))
+                match pasetoken.decode(tampered(r[5]))
+                    Err(_) => test.assert(true)
+                    Ok(t)  =>
+                        match pasetoken.verify(t, pk, policy(), implicit_of_row(r), now())
+                            Ok(_)  => test.fail("a changed byte verified")
+                            Err(e) => test.assert(paserr.is_authentication_failure(e))
+        i = i + 1
+
+@test
+fn test_another_public_key_does_not_verify() [io]
+    let rs = public_rows()
+    match paskey.public_key(bytes.to_byte_list(hex(rs[0][1])))
+        Err(e) => test.fail(e.message())
+        Ok(pk) =>
+            match pasetoken.decode(rs[1][5])
+                Err(e) => test.fail(e.message())
+                Ok(t)  =>
+                    match pasetoken.verify(t, pk, policy(), implicit_of_row(rs[1]), now())
+                        Ok(_)  => test.fail("a token verified under another key")
+                        Err(e) => test.assert(paserr.is_authentication_failure(e))
+
+@test
+fn test_paserk_strings_and_identifiers_match_the_reference() [io]
+    var i = 0
+    for r in paserk_rows()
+        test.case("row ${i}: ${r[0]}")
+        if r[0] == "local"
+            match paskey.local_key(hex(r[1]))
+                Err(e) => test.fail(e.message())
+                Ok(k)  =>
+                    test.assert_eq_str(paserk.local_to_string(k), r[2])
+                    test.assert_eq_str(paserk.local_id(k), r[3])
+                    test.assert(paserk.local_id_matches(k, r[3]))
+                    match paserk.local_from_string(r[2])
+                        Ok(back) => test.assert_eq_str(bytes.to_hex(paskey.local_key_bytes(back)), r[1])
+                        Err(e)   => test.fail(e.message())
+        else if r[0] == "public"
+            match paskey.public_key(bytes.to_byte_list(hex(r[1])))
+                Err(e) => test.fail(e.message())
+                Ok(k)  =>
+                    test.assert_eq_str(paserk.public_to_string(k), r[2])
+                    test.assert_eq_str(paserk.public_id(k), r[3])
+                    test.assert(paserk.public_id_matches(k, r[3]))
+                    match paserk.public_from_string(r[2])
+                        Ok(back) => test.assert_eq_str(bytes.to_hex(bytes.from_byte_list(paskey.public_key_bytes(back))), r[1])
+                        Err(e)   => test.fail(e.message())
+        else
+            match paskey.secret_key(bytes.to_byte_list(hex(r[1])))
+                Err(e) => test.fail(e.message())
+                Ok(k)  =>
+                    test.assert_eq_str(paserk.secret_to_string(k), r[2])
+                    test.assert_eq_str(paserk.secret_id(k), r[3])
+                    match paserk.secret_from_string(r[2])
+                        Ok(back) => test.assert_eq_str(paserk.secret_to_string(back), r[2])
+                        Err(e)   => test.fail(e.message())
+        i = i + 1

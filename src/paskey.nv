@@ -1,44 +1,56 @@
 // paskey.nv — the version, the purpose, and the three key types.
 //
-// Every body is a `todo()`.  The signatures are the design, and the
-// compiler checks them as claims; see the README for the stamp.
-//
-// THERE IS NO ALGORITHM FIELD, AND THAT IS THE POINT OF THE FORMAT.
+// There is no algorithm field, and that is the point of the format.
 //
 // A JWT tells its verifier which algorithm to use, in a header the
 // attacker also controls.  Every classic JWT attack lives in that one
-// sentence: `alg: none`, and HS256-with-the-RSA-public-key-as-the-HMAC-
+// sentence: `alg: none`, and hs256-with-the-rsa-public-key-as-the-HMAC-
 // secret.  jwt-nv closes both by construction — `none` is not an arm of
-// its enum, and a key carries its own algorithm — and the README there
+// its enum, and a key carries its own algorithm — and the readme there
 // explains it at length.
 //
 // PASETO removes the question instead of answering it.  A token begins
 // `v4.local.` or `v4.public.`, the version and the purpose are a fixed
 // prefix rather than a field, and each (version, purpose) pair has
-// exactly ONE cryptographic construction with no parameters.  So there
+// exactly one cryptographic construction with no parameters.  So there
 // is no algorithm to negotiate, nothing to downgrade to, and no
 // header to lie in.
 //
 // What this module adds on top is the other half of the same idea: a
-// KEY CARRIES ITS PURPOSE.  `PasLocalKey` is 32 symmetric bytes and
+// key carries its purpose.  `PasLocalKey` is 32 symmetric bytes and
 // can only decrypt; `PasPublicKey` can only verify; `PasSecretKey` can
 // only sign.  They are three types rather than one with a role field,
 // so `decrypt` cannot be handed a public key at all and
 // `PasPurposeMismatch` is what a caller sees if they try to use the
 // right kind of key for the wrong kind of token.
 //
-// ONE VERSION.  `PasV4` is the only arm of `PasVersion`, and the
+// One version.  `PasV4` is the only arm of `PasVersion`, and the
 // absence of the others is deliberate rather than unfinished: v1 and
-// v2 are deprecated by the specification, and v3 — AES-256-CTR with
-// HMAC-SHA-384 for local, ECDSA over P-384 for public — exists for
+// v2 are deprecated by the specification, and v3 — aes-256-ctr with
+// hmac-sha-384 for local, ECDSA over P-384 for public — exists for
 // callers under a NIST-algorithms constraint.  A v3 arm here would need
-// P-384 and AES, neither of which is on the grid, and adding the arm
+// P-384 and AES, neither of which is available, and adding the arm
 // before the primitives is how a package ships a value nothing can
-// consume.  The README names it as outside; if a consumer needs v3 it
-// is a second version arm and two new rows, not a flag.
+// consume.  The readme names it as outside; if a consumer needs v3 it
+// is a second version arm and two new primitives, not a flag.
 
+use std.bytes
+use std.list
+use std.str
 use ed25519
 use paserr
+
+// The part of a token that names its version and purpose, quoted for a
+// refusal: everything up to the last dot when there are three or more
+// parts, otherwise the first 24 characters.
+fn prefix_quote(token: Str) -> Str
+    let parts = str.split(token, ".")
+    if list.len(parts) >= 3
+        str.join(list.take(parts, list.len(parts) - 1), ".") + "."
+    else if str.len(token) > 24
+        str.slice(token, 0, 24)
+    else
+        token
 
 // ── Sizes ────────────────────────────────────────────────────────────
 
@@ -93,7 +105,7 @@ pub enum PasPurpose
     // from a JWT, whose payload is base64 anyone can decode.
     PasLocal
     // Signed with a secret key and verifiable with the public one.
-    // The claims are READABLE BY ANYONE; only their authorship is
+    // The claims are readable by anyone; only their authorship is
     // protected.  `paseton.dangerous_unverified_payload_json` is the
     // honest way to say so.
     PasPublic
@@ -107,7 +119,8 @@ pub enum PasPurpose
 //     println(paskey.version_name(PasV4))         // v4
 // ```
 pub fn version_name(v: PasVersion) -> Str []
-    todo("paseto-nv.paskey.version_name")
+    match v
+        PasV4 => "v4"
 
 // The purpose's name as it appears in a token prefix: `local` or
 // `public`.
@@ -119,13 +132,15 @@ pub fn version_name(v: PasVersion) -> Str []
 //     println(paskey.purpose_name(PasPublic))     // public
 // ```
 pub fn purpose_name(p: PasPurpose) -> Str []
-    todo("paseto-nv.paskey.purpose_name")
+    match p
+        PasLocal  => "local"
+        PasPublic => "public"
 
 // The full prefix a token of this version and purpose begins with,
 // trailing dot included: `v4.local.` or `v4.public.`.
 //
 // The one string a decoder matches on, and the whole of PASETO's
-// answer to algorithm confusion: this is a CONSTANT compared against
+// answer to algorithm confusion: this is a constant compared against
 // the front of a token, not a field read out of it.
 //
 // ```novo
@@ -135,11 +150,11 @@ pub fn purpose_name(p: PasPurpose) -> Str []
 //     println(paskey.prefix(PasV4, PasLocal))     // v4.local.
 // ```
 pub fn prefix(v: PasVersion, p: PasPurpose) -> Str []
-    todo("paseto-nv.paskey.prefix")
+    version_name(v) + "." + purpose_name(p) + "."
 
 // The version and purpose a token's prefix names, or the refusal.
 //
-// `v2.local.` and `v3.public.` are REAL PASETO and are refused here by
+// `v2.local.` and `v3.public.` are real PASETO and are refused here by
 // name, which is better than being told the token is malformed: a
 // caller upgrading from an older library needs to know that the token
 // is fine and this package does not do that version.
@@ -153,7 +168,12 @@ pub fn prefix(v: PasVersion, p: PasPurpose) -> Str []
 //         Err(_) => println("not a v4 token")
 // ```
 pub fn parse_prefix(token: Str) -> Result<(PasVersion, PasPurpose), PasError> []
-    todo("paseto-nv.paskey.parse_prefix")
+    if str.starts_with(token, "v4.local.")
+        Ok((PasV4, PasLocal))
+    else if str.starts_with(token, "v4.public.")
+        Ok((PasV4, PasPublic))
+    else
+        Err(PasUnknownPrefix(prefix_quote(token)))
 
 // ── The three keys ───────────────────────────────────────────────────
 
@@ -195,9 +215,9 @@ pub struct PasSecretKey
 
 // A v4.public public key: what verifies, and nothing else.
 //
-// A SEPARATE TYPE from `PasSecretKey` rather than one key with a role
+// A separate type from `PasSecretKey` rather than one key with a role
 // field, because the mistake it prevents is the one people make —
-// an API where the same value flows into both `sign` and `verify` and
+// an api where the same value flows into both `sign` and `verify` and
 // a caller mixes up which end of the pair they hold.
 //
 // ```novo
@@ -215,7 +235,7 @@ pub struct PasPublicKey
 
 // A local key from 32 bytes the caller supplies.
 //
-// This package has no `[rand]` row and never will: entropy is the
+// This package has no random-number effect and never will: entropy is the
 // host's.  Hand it 32 bytes from a source you trust — rand-nv,
 // `/dev/urandom` — and the only refusal is the width.
 //
@@ -229,7 +249,11 @@ pub struct PasPublicKey
 //         Err(_) => println("not 32 bytes")
 // ```
 pub fn local_key(k: Bytes) -> Result<PasLocalKey, PasError> []
-    todo("paseto-nv.paskey.local_key")
+    let n = bytes.len(k)
+    if n == PAS_LOCAL_KEY_BYTES
+        Ok(PasLocalKey { key: bytes.clone(k) })
+    else
+        Err(PasKeyLengthWrong(n, PAS_LOCAL_KEY_BYTES))
 
 // The local key's bytes, for a caller writing them to a key store.
 //
@@ -243,7 +267,7 @@ pub fn local_key(k: Bytes) -> Result<PasLocalKey, PasError> []
 //         Err(_) => println("not 32 bytes")
 // ```
 pub fn local_key_bytes(k: PasLocalKey) -> Bytes []
-    todo("paseto-nv.paskey.local_key_bytes")
+    bytes.clone(k.key)
 
 // A secret key from a 32-byte Ed25519 seed.
 //
@@ -257,7 +281,9 @@ pub fn local_key_bytes(k: PasLocalKey) -> Bytes []
 //         Err(_) => println("not a seed")
 // ```
 pub fn secret_key(seed: [u8]) -> Result<PasSecretKey, PasError> []
-    todo("paseto-nv.paskey.secret_key")
+    match ed25519.signing_key_from_seed(seed)
+        Ok(sk) => Ok(PasSecretKey { key: sk })
+        Err(_) => Err(PasKeyLengthWrong(list.len(seed), PAS_SEED_BYTES))
 
 // A public key from 32 bytes.
 //
@@ -271,7 +297,9 @@ pub fn secret_key(seed: [u8]) -> Result<PasSecretKey, PasError> []
 //         Err(_) => println("not a point")
 // ```
 pub fn public_key(b: [u8]) -> Result<PasPublicKey, PasError> []
-    todo("paseto-nv.paskey.public_key")
+    match ed25519.verifying_key_from_bytes(b)
+        Ok(vk) => Ok(PasPublicKey { key: vk })
+        Err(_) => Err(PasKeyLengthWrong(list.len(b), PAS_PUBLIC_KEY_BYTES))
 
 // The public key a secret key corresponds to.
 //
@@ -285,7 +313,7 @@ pub fn public_key(b: [u8]) -> Result<PasPublicKey, PasError> []
 //         Err(_) => println("not a seed")
 // ```
 pub fn public_key_of(sk: PasSecretKey) -> PasPublicKey []
-    todo("paseto-nv.paskey.public_key_of")
+    PasPublicKey { key: ed25519.verifying_key_of(sk.key) }
 
 // The public key's thirty-two bytes.
 //
@@ -299,7 +327,7 @@ pub fn public_key_of(sk: PasSecretKey) -> PasPublicKey []
 //         Err(_) => println("not a point")
 // ```
 pub fn public_key_bytes(k: PasPublicKey) -> [u8] []
-    todo("paseto-nv.paskey.public_key_bytes")
+    ed25519.verifying_key_bytes(k.key)
 
 // The ed25519-nv signing key inside a secret key, for a caller that
 // needs to sign something that is not a token.
@@ -314,13 +342,13 @@ pub fn public_key_bytes(k: PasPublicKey) -> [u8] []
 //         Err(_) => println("not a seed")
 // ```
 pub fn signing_key_of(sk: PasSecretKey) -> Ed25519SigningKey []
-    todo("paseto-nv.paskey.signing_key_of")
+    sk.key
 
 // The strictness `verify` checks a v4.public signature with: `EdStrict`
 // — cofactorless, canonical encodings required, small-order points
 // refused.
 //
-// PUBLIC AND FIXED, because the choice matters and nobody should be
+// Public and fixed, because the choice matters and nobody should be
 // making it per call.  ed25519-nv makes strictness an argument with no
 // default precisely so that a protocol says which rule it means, and
 // this is PASETO saying it: a token format wants exactly one valid
@@ -336,7 +364,7 @@ pub fn signing_key_of(sk: PasSecretKey) -> Ed25519SigningKey []
 //         _        => println("this cannot happen")
 // ```
 pub fn signature_strictness() -> Ed25519Strictness []
-    todo("paseto-nv.paskey.signature_strictness")
+    EdStrict
 
 // Which purpose a key is for: `PasLocal` for a local key, `PasPublic`
 // for either half of a key pair.
@@ -355,4 +383,4 @@ pub fn signature_strictness() -> Ed25519Strictness []
 //         Err(_) => println("not 32 bytes")
 // ```
 pub fn local_key_purpose(k: PasLocalKey) -> PasPurpose []
-    todo("paseto-nv.paskey.local_key_purpose")
+    PasLocal

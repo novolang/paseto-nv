@@ -1,10 +1,5 @@
 // paspae_tests.nv — PAE, against the specification's own vectors.
 //
-// RED ON PURPOSE: every assertion against a FUNCTION reaches
-// `not implemented: paseto-nv.<module>.<fn>`, because every body under
-// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
-// because a constant is not a stub.
-//
 // THESE FOUR VECTORS ARE THE ONES EVERY PASETO IMPLEMENTATION RUNS.
 // They are in the specification under "Authentication Padding", and a
 // port that passes them has the hardest part right — the count, the

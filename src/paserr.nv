@@ -1,18 +1,15 @@
 // paserr.nv — one error type for the decoder, the two purposes, the
 // claim validator and PASERK.
 //
-// Every body is a `todo()`.  The signatures are the design, and the
-// compiler checks them as claims; see the README for the stamp.
+// The variants split three ways, and a caller acts on the split.
 //
-// THE VARIANTS SPLIT THREE WAYS, and a caller acts on the split.
-//
-//   * A MALFORMED token — a bad prefix, a body that is not base64, a
+//   * A malformed token — a bad prefix, a body that is not base64, a
 //     part count that is not three or four.  That is a client sending
 //     rubbish, or a proxy mangling a header.
-//   * A token that did not AUTHENTICATE — a MAC or a signature that
+//   * A token that did not authenticate — a MAC or a signature that
 //     did not match.  That is an attack or a key rotation, and it is
 //     what a rate limiter counts.
-//   * A token that authenticated and was REFUSED BY POLICY — expired,
+//   * A token that authenticated and was refused by policy — expired,
 //     not yet valid, wrong issuer, wrong audience.  That is an
 //     ordinary "log in again", and a service that alerted on it would
 //     alert every day.
@@ -22,7 +19,7 @@
 // variant, and a service that logs all three the same way either
 // drowns its alerts or misses an attack in them.
 //
-// `PasBadMac` and `PasBadSignature` carry NOTHING.  There is exactly
+// `PasBadMac` and `PasBadSignature` carry nothing.  There is exactly
 // one thing a caller may learn from either, and a variant with a byte
 // offset in it would be a position oracle over a token an attacker is
 // editing.
@@ -53,11 +50,11 @@ pub enum PasError
     // confuse here, and this variant is what a caller sees if they try
     // it anyway.
     PasPurposeMismatch(token: Str, key: Str)
-    // The MAC over a v4.local token did not match.  NOTHING ELSE IS
-    // SAID and nothing was decrypted.
+    // The MAC over a v4.local token did not match.  Nothing else is
+    // said and nothing was decrypted.
     PasBadMac
-    // The signature on a v4.public token did not verify.  NOTHING ELSE
-    // IS SAID.
+    // The signature on a v4.public token did not verify.  nothing else
+    // is said.
     PasBadSignature
     // The claims are not a JSON object, or a registered claim is not
     // the type the specification gives it.  `claim` names which.
@@ -113,7 +110,26 @@ pub enum PasError
 // ```
 impl Error for PasError
     fn message(self) -> Str
-        todo("paseto-nv.paserr.PasError.message")
+        match self
+            PasUnknownPrefix(got)              => "the token starts with ${got}, which is not v4.local. or v4.public."
+            PasBadPartCount(got)               => "the token has ${got} parts, want 3 or 4"
+            PasBadBase64(part, at)             => "the ${part} is not base64url without padding, at offset ${at}"
+            PasPayloadTooShort(got, want)      => "the payload is ${got} bytes, want at least ${want}"
+            PasKeyLengthWrong(got, want)       => "the key is ${got} bytes, want ${want}"
+            PasPurposeMismatch(token, key)     => "a ${key} key cannot open a ${token} token"
+            PasBadMac                          => "the MAC does not match"
+            PasBadSignature                    => "the signature does not verify"
+            PasBadClaims(claim)                => "the claim ${claim} is not what the specification gives it"
+            PasBadTimestamp(claim, at)         => "the claim ${claim} is not an RFC 3339 timestamp, at offset ${at}"
+            PasExpired(exp, now)               => "the token expired at ${exp}, it is now ${now}"
+            PasNotYetValid(nbf, now)           => "the token is not valid before ${nbf}, it is now ${now}"
+            PasClaimMissing(claim)             => "the claim ${claim} is required and absent"
+            PasClaimMismatch(claim, want, got) => "the claim ${claim} is ${got}, want ${want}"
+            PasPolicyUnusable(why)             => "the policy is unusable: ${why}"
+            PasUnknownPaserkType(got)          => "the PASERK type ${got} is not one this package reads"
+            PasBadPaserkData(kind, got, want)  => "the ${kind} key data is ${got} bytes, want ${want}"
+            PasOutputTooSmall(want, have)      => "the output buffer has ${have} bytes, want ${want}"
+            PasPaeTooLong(len)                 => "a piece of ${len} bytes is longer than the encoding can name"
 
 // The same sentence as `message`, as a free function, for a caller
 // that has an error value rather than a `Result` to call `.message()`
@@ -126,7 +142,7 @@ impl Error for PasError
 //     println(paserr.describe(PasExpired(1000, 2000)))
 // ```
 pub fn describe(e: PasError) -> Str []
-    todo("paseto-nv.paserr.describe")
+    e.message()
 
 // Whether the error means the token was not authentic: `PasBadMac` or
 // `PasBadSignature`, and nothing else.
@@ -140,12 +156,15 @@ pub fn describe(e: PasError) -> Str []
 //     println("${paserr.is_authentication_failure(PasBadMac)}")     // true
 // ```
 pub fn is_authentication_failure(e: PasError) -> Bool []
-    todo("paseto-nv.paserr.is_authentication_failure")
+    match e
+        PasBadMac       => true
+        PasBadSignature => true
+        _               => false
 
-// Whether the error means the token WAS authentic and the policy
+// Whether the error means the token was authentic and the policy
 // refused it: expired, not yet valid, a missing or mismatched claim.
 //
-// What a service answers with "log in again" and does NOT alert on.
+// What a service answers with "log in again" and does not alert on.
 // The distinction from the one above is the whole reason both exist:
 // an expiry is a daily event and a bad MAC is not.
 //
@@ -156,4 +175,9 @@ pub fn is_authentication_failure(e: PasError) -> Bool []
 //     println("${paserr.is_policy_refusal(PasExpired(1000, 2000))}")   // true
 // ```
 pub fn is_policy_refusal(e: PasError) -> Bool []
-    todo("paseto-nv.paserr.is_policy_refusal")
+    match e
+        PasExpired(_, _)          => true
+        PasNotYetValid(_, _)      => true
+        PasClaimMissing(_)        => true
+        PasClaimMismatch(_, _, _) => true
+        _                         => false

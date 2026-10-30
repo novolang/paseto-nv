@@ -1,11 +1,6 @@
 // pasetoken_tests.nv — the two token types, the prefix that replaces
 // an algorithm field, and the escape hatch that refuses.
 //
-// RED ON PURPOSE: every assertion against a FUNCTION reaches
-// `not implemented: paseto-nv.<module>.<fn>`, because every body under
-// `src/` is a `todo()`. Assertions against published CONSTANTS pass,
-// because a constant is not a stub.
-//
 // THE VECTORS ARE THE SPECIFICATION'S. `v4.local` and `v4.public` test
 // vectors come from the PASETO test-vector repository, which every
 // implementation runs; the tokens below are its `4-S-1` and `4-E-1`

@@ -9,12 +9,6 @@ and its key serialisation by
 [PASERK](https://github.com/paseto-standard/paserk). This package
 implements PASETO version 4 and PASERK's key tier in novo-lang.
 
-**Status: NOT IMPLEMENTED — interface only.** Every function is
-declared with its full signature, but every body is a `todo()` that
-panics when called. The package is published so its design can be
-reviewed and depended on before it is implemented. Version 0.1.0 will
-be the first working release.
-
 ## What a PASETO is
 
 A token is dot-separated text beginning with a **version** and a
@@ -103,11 +97,7 @@ fn main() [io]
                         Ok(v)  => println("the subject is ${pasclaims.subject(pasetoken.claims_of(v))}")
 ```
 
-Build and test with `novo pkg build` and `novo test`. Today `novo test`
-fails on purpose: almost every test reaches a
-`not implemented: paseto-nv.<module>.<fn>` panic. The exceptions assert
-about published constants, which are not stubs. The tests are the
-specification the implementation will have to satisfy.
+Build and test with `novo pkg build` and `novo test`.
 
 ## What the package contains
 
@@ -212,10 +202,20 @@ disclosing it.** Put one in a footer or a log.
 
 ## Timing behaviour
 
-No claim is made here beyond what the primitives underneath provide.
-The authentication tag comparison in `decrypt` and the signature check
-in `verify` belong to the BLAKE2b and Ed25519 implementations this
-package calls, and each of those packages states its own behaviour.
+The limits of each claim are stated here exactly. They describe the source.
+The compiler makes no promise about the machine code.
+
+**The tag comparison is constant time.** `decrypt` compares the computed
+BLAKE2b tag with the one in the token using `digest.ct_eq` of crypto-nv, and
+`paserk.local_id_matches` compares identifiers the same way. The comparison
+takes the same time whatever the position of the first difference.
+
+**The signature check follows ed25519-nv.** `verify` calls ed25519-nv at its
+`EdStrict` setting and says nothing more than that package does.
+
+**Everything else varies with the token.** Decoding, claim parsing and policy
+checking take time that depends on the length of the token and on which claim
+is first refused. None of them handles a key.
 
 ## What is not included
 
@@ -223,7 +223,7 @@ package calls, and each of those packages states its own behaviour.
   specification. Version 3, which is AES-256-CTR with HMAC-SHA-384 for
   local and ECDSA over P-384 for public, is for callers under a
   constraint to use NIST algorithms, and needs P-384 and AES, neither
-  of which is on the registry. A `PasVersion` arm published before the
+  of which this package has. A `PasVersion` arm published before the
   primitives exist is a value nothing can consume.
 - **PASERK's wrapping tier.** `k4.local-wrap.pie.`, `k4.seal.`,
   `k4.local-pw.` and `k4.secret-pw.` are each key encryption with their
@@ -234,20 +234,9 @@ package calls, and each of those packages states its own behaviour.
 - **A clock.** See rule 6.
 - **A build for a microcontroller.** The surface is strings, byte
   buffers and lists of claims, so this package does not build for a
-  microcontroller with no heap allocator.
-  [chacha20-nv](https://novo-lang.org/packages/chacha20-nv) underneath
-  does.
-
-## What is still missing underneath
-
-`v4.local` is defined over BLAKE2b: the key splitting into
-`paseto-encryption-key` and `paseto-auth-key-for-aead`, and the tag
-itself. Every PASERK identifier is a BLAKE2b hash too.
-
-[blake2-nv](https://novo-lang.org/packages/blake2-nv) 0.0.2 publishes
-that primitive, and it is itself an interface release whose bodies
-panic. This package does not name it as a dependency yet. The
-signatures here do not change when it does.
+  microcontroller with no heap allocator. The cipher underneath,
+  [chacha20-nv](https://novo-lang.org/packages/chacha20-nv), does, and so
+  does [blake2-nv](https://novo-lang.org/packages/blake2-nv).
 
 ## Related packages
 
@@ -272,8 +261,11 @@ signatures here do not change when it does.
 - [base64-nv](https://novo-lang.org/packages/base64-nv) is the
   base64url without padding used throughout. This package depends on
   it.
-- [blake2-nv](https://novo-lang.org/packages/blake2-nv) is the hash
-  named above.
+- [blake2-nv](https://novo-lang.org/packages/blake2-nv) supplies keyed
+  BLAKE2b, which is the key splitting, the tag and every PASERK identifier.
+  This package depends on it.
+- [crypto-nv](https://novo-lang.org/packages/crypto-nv) supplies `digest.ct_eq`,
+  the constant-time comparison. This package depends on it.
 - [cookie-nv](https://novo-lang.org/packages/cookie-nv) signs and
   encrypts a cookie value, which is the same job when the value never
   leaves one service.
@@ -281,65 +273,30 @@ signatures here do not change when it does.
 ## Tests
 
 ```bash
-novo test tests/paspae_tests.nv      # pre-authentication encoding
-novo test tests/paskey_tests.nv      # the versions, purposes and key types
-novo test tests/pasetoken_tests.nv   # decoding, verifying, decrypting
-novo test tests/paspolicy_tests.nv   # what a policy accepts
-novo test tests/paserk_tests.nv      # keys written down, and their identifiers
+novo test
 ```
 
-The oracle is the PASETO specification and the shared test vector
-repository every implementation runs: `4-E-*` for local tokens, `4-S-*`
-for public tokens, and the vectors under "Authentication Padding" for
-PAE. The reference implementations are the Rust crate `rusty_paseto`
-and Python's `pyseto`.
+`tests/paspae_tests.nv` holds the pre-authentication encoding vectors of the
+specification. `tests/generated_vectors_tests.nv` is written by
+`tests/vectors/generate.py` and holds `v4.local` and `v4.public` tokens and
+PASERK strings and identifiers. They come from a reference in
+`tests/vectors/paseto_ref.py`, written from the specifications on Python's
+`hashlib` (BLAKE2b) and the `cryptography` package (Ed25519 and the ChaCha20
+block function), with HChaCha20 written out and checked against
+draft-irtf-cfrg-xchacha section 2.2.1 when the file is loaded. Loading it also
+reproduces the published token of PASETO test vector 4-S-1, which checks the
+pre-authentication encoding, the header and the base64url framing against a
+token this package did not produce. `tests/paseto_edge_tests.nv` checks that
+token again through the package and covers every refusal, every policy
+outcome and every accessor.
 
 The suite asserts that PAE's length prefixes make `("ab", "c")` and
 `("a", "bc")` different inputs, that the top bit of a length field is
-cleared, that a PASERK identifier is 33 bytes, that a `k4.secret.`
-string whose halves disagree is refused, that a local key aimed at a
-public token is refused by name, and that a token verified under one
-implicit assertion does not verify under another.
-
-The tests compile today and fail at run, each on the
-`not implemented: paseto-nv.<module>.<fn>` panic that is its body. That
-is the expected state of an interface release. They turn green one at a
-time as bodies land.
-
-## Implementation status
-
-| Item | Implemented |
-| --- | --- |
-| `paskey.PAS_LOCAL_KEY_BYTES`, `.PAS_SEED_BYTES`, `.PAS_PUBLIC_KEY_BYTES`, `.PAS_SIGNATURE_BYTES`, `.PAS_NONCE_BYTES`, `.PAS_MAC_BYTES` | yes (they are constants) |
-| `pasclaims.PAS_CLAIM_*`, the seven names | yes (they are constants) |
-| `paserk.PASERK_*` and `.PASERK_ID_BYTES` | yes (they are constants) |
-| `paspae.PAE_MAX_PIECE_BYTES` | yes (it is a constant) |
-| Every `pub struct` and `pub enum` in the seven modules | the types are declared |
-| `paserr.describe`, `.is_authentication_failure`, `.is_policy_refusal`, `PasError.message` | no |
-| `paskey.version_name`, `.purpose_name`, `.prefix`, `.parse_prefix` | no |
-| `paskey.local_key`, `.local_key_bytes`, `.secret_key`, `.public_key`, `.public_key_of`, `.public_key_bytes` | no |
-| `paskey.signing_key_of`, `.signature_strictness`, `.local_key_purpose` | no |
-| `pasclaims.instant`, `.unix_seconds`, `.parse_timestamp`, `.format_timestamp`, `.civil_of` | no |
-| `pasclaims.parse`, `.payload_json`, `.issuer`, `.subject`, `.audience`, `.token_id` | no |
-| `pasclaims.expiration`, `.not_before`, `.issued_at` | no |
-| `pasclaims.footer`, `.no_footer`, `.footer_text`, `.footer_is_empty` | no |
-| `pasclaims.implicit`, `.no_implicit`, `.implicit_text`, `.implicit_is_empty` | no |
-| `paspae.encode_len`, `.encode_into`, `.encode`, `.length_field` | no |
-| `pasetoken.decode`, `.prefix_of`, `.purpose_of`, `.version_of`, `.unverified_footer`, `.has_footer` | no |
-| `pasetoken.dangerous_unverified_payload_json` | no |
-| `pasetoken.decrypt`, `.verify`, `.claims_of`, `.footer_of` | no |
-| `pasetoken.encrypt`, `.sign`, `.pre_auth` | no |
-| `paspolicy.strict`, `.requiring`, `.with_leeway`, `.allowing_no_expiration` | no |
-| `paspolicy.requiring_not_before`, `.requiring_issued_at`, `.requiring_subject` | no |
-| `paspolicy.issuer`, `.audience`, `.leeway_seconds`, `.check` | no |
-| `paspolicy.requires_expiration`, `.requires_not_before`, `.requires_issued_at`, `.requires_subject` | no |
-| `paserk.type_prefix`, `.type_of`, `.is_secret` | no |
-| `paserk.local_to_string`, `.local_from_string`, `.public_to_string`, `.public_from_string` | no |
-| `paserk.secret_to_string`, `.secret_from_string` | no |
-| `paserk.local_id`, `.public_id`, `.secret_id`, `.local_id_matches`, `.public_id_matches` | no |
+cleared, that a PASERK identifier is 33 bytes, that a `k4.secret.` string
+whose halves disagree is refused, that a local key aimed at a public token is
+refused by name, that a token verified under one implicit assertion does not
+verify under another, and that a changed byte is an authentication failure.
 
 ## Licence
 
-Apache-2.0. See `LICENSE`.
-
-<!-- docs/writing-a-readme.md is the style guide for this page. -->
+Apache-2.0.

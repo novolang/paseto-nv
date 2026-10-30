@@ -1,9 +1,6 @@
 // paserk.nv — PASERK, the key serialisation that goes with PASETO.
 //
-// Every body is a `todo()`.  The signatures are the design, and the
-// compiler checks them as claims; see the README for the stamp.
-//
-// WHAT IT IS AND WHY IT IS NOT JWK.  A token format needs a way to
+// What it is and why it is not JWK.  A token format needs a way to
 // write a key down — in a config file, in a key store, in a `kid`
 // lookup table — and JWT's answer is JWK: a JSON object with a type
 // field, a curve field, an algorithm field and several optional ones,
@@ -16,12 +13,12 @@
 //     k4.public.<base64url of 32 bytes>
 //     k4.secret.<base64url of 64 bytes>
 //
-// and the type is a CONSTANT a parser compares against, not a field it
+// and the type is a constant a parser compares against, not a field it
 // reads.  A `k4.public.` string cannot be loaded as a local key
 // because the prefix is checked first and `PasPurposeMismatch` is the
 // answer.
 //
-// THE KEY IDENTIFIERS ARE ONE-WAY, and that is the part worth
+// The key identifiers are one-way, and that is the part worth
 // understanding.  `k4.lid.`, `k4.pid.` and `k4.sid.` are BLAKE2b
 // hashes of the corresponding serialised key, truncated to 33 bytes.
 // So a `kid` in a token's footer names a key without revealing it —
@@ -30,25 +27,124 @@
 // either sending it.  `local_id` takes a key and answers an
 // identifier; there is no function the other way and there cannot be.
 //
-// **BLAKE2b IS THE SAME MISSING ROW `pasetoken` NAMES**: `blake2-nv`,
-// `crypto` / `core`. The identifiers cannot be computed without it, and
-// this is the second place in one package that needs it — the third
-// place on the grid, counting argon2-nv's note.
-//
-// WHAT IS OUTSIDE, and named rather than silently absent.  PASERK has
-// a second tier of types that WRAP a key: `k4.local-wrap.pie.`,
+// What is outside, and named rather than silently absent.  PASERK has
+// a second tier of types that wrap a key: `k4.local-wrap.pie.`,
 // `k4.seal.`, `k4.local-pw.` and `k4.secret-pw.`.  They are key
 // encryption — a local key sealed to a public key, a secret key
 // encrypted under a password — and each is a construction with its own
 // test vectors and its own failure modes.  They belong here
-// eventually; they are not in 0.0.1 because the password ones need the
-// scrypt-shaped derivation the grid does not have either, and shipping
+// eventually; they are not here because the password ones need a
+// scrypt-shaped derivation that is not yet available, and shipping
 // half of a wrapping tier is worse than shipping none of it.  The
-// README says so where a reader deciding what to depend on will see it.
+// readme says so where a reader deciding what to depend on will see it.
 
 use std.bytes
+use std.str
+use std.list
+use b2bytes
+use base64
+use digest
 use paskey
 use paserr
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+fn b64(b: Bytes) -> Str []
+    base64.encode(b, B64UrlSafe, B64Unpadded)
+
+// The type prefix of `s`, quoted for a refusal: everything up to the
+// last dot when there are three or more parts, otherwise the first 24
+// characters.
+fn quote(s: Str) -> Str []
+    let parts = str.split(s, ".")
+    if list.len(parts) >= 3
+        str.join(list.take(parts, list.len(parts) - 1), ".") + "."
+    else if str.len(s) > 24
+        str.slice(s, 0, 24)
+    else
+        s
+
+// The type `s` begins with, if it is one of the six.
+fn kind_of(s: Str) -> ?PaserkType []
+    if str.starts_with(s, PASERK_LOCAL)
+        Some(PaserkLocal)
+    else if str.starts_with(s, PASERK_PUBLIC)
+        Some(PaserkPublic)
+    else if str.starts_with(s, PASERK_SECRET)
+        Some(PaserkSecret)
+    else if str.starts_with(s, PASERK_LOCAL_ID)
+        Some(PaserkLocalId)
+    else if str.starts_with(s, PASERK_PUBLIC_ID)
+        Some(PaserkPublicId)
+    else if str.starts_with(s, PASERK_SECRET_ID)
+        Some(PaserkSecretId)
+    else
+        None
+
+fn prefix_of_type(t: PaserkType) -> Str []
+    match t
+        PaserkLocal    => PASERK_LOCAL
+        PaserkPublic   => PASERK_PUBLIC
+        PaserkSecret   => PASERK_SECRET
+        PaserkLocalId  => PASERK_LOCAL_ID
+        PaserkPublicId => PASERK_PUBLIC_ID
+        PaserkSecretId => PASERK_SECRET_ID
+
+fn b64_offset(e: B64Error) -> Int []
+    match e
+        B64BadCharacter(at, _)     => at
+        B64NonCanonicalTail(at, _) => at
+        B64BadLength(n)            => n
+        // cov: skip — padding is refused before decoding, and `decode` allocates its own buffer
+        _                          => 0
+
+// The data of a PASERK string, base64url without padding.
+fn unb64(data: Str) -> Result<Bytes, PasError> []
+    match str.index(data, "=")
+        Some(at) => Err(PasBadBase64("key", at))
+        None     =>
+            match base64.decode(data, B64UrlSafe)
+                Ok(b)  => Ok(b)
+                Err(e) => Err(PasBadBase64("key", b64_offset(e)))
+
+// The decoded data of a PASERK string that must be of type `want`.
+// Another PASERK type is a purpose mismatch, and a string that is none
+// of the six is an unknown type.
+fn key_data(s: Str, want: PaserkType, label: Str) -> Result<Bytes, PasError> []
+    match kind_of(s)
+        None        => Err(PasUnknownPaserkType(quote(s)))
+        Some(found) =>
+            if prefix_of_type(found) != prefix_of_type(want)
+                Err(PasPurposeMismatch(prefix_of_type(found), label))
+            else
+                unb64(str.slice(s, str.len(prefix_of_type(want)), str.len(s)))
+
+// A secret key's 64 bytes: the seed, then the public key it derives.
+fn secret_bytes(k: PasSecretKey) -> Bytes []
+    bytes.from_byte_list(ed25519.seed_of(paskey.signing_key_of(k))) + bytes.from_byte_list(paskey.public_key_bytes(paskey.public_key_of(k)))
+
+// The secret key of 64 bytes, if the second half is the first half's
+// public key.
+fn secret_from_pair(data: Bytes) -> Result<PasSecretKey, PasError> []
+    match paskey.secret_key(bytes.to_byte_list(bytes.slice(data, 0, PAS_SEED_BYTES)))
+        // cov: skip — the slice is exactly 32 bytes
+        Err(e) => Err(e)
+        Ok(sk) =>
+            if bytes.to_hex(secret_bytes(sk)) == bytes.to_hex(data)
+                Ok(sk)
+            else
+                Err(PasBadPaserkData("secret (the public half is not the seed's)", bytes.len(data), bytes.len(data)))
+
+// An identifier: BLAKE2b with a 33-byte digest over the identifier's
+// own prefix followed by the key's PASERK string.
+fn identifier(header: Str, paserk: Str) -> Str []
+    match b2bytes.blake2b_into(bytes.from_str(header + paserk), bytes.zeros(PASERK_ID_BYTES))
+        Ok(d)  => header + b64(d)
+        // cov: skip — 33 is a digest length BLAKE2b admits
+        Err(_) => header
+
+fn same_text(a: Str, b: Str) -> Bool []
+    digest.ct_eq(bytes.from_str(a), bytes.from_str(b))
 
 // ── The type prefixes ────────────────────────────────────────────────
 
@@ -96,11 +192,11 @@ pub const PASERK_ID_BYTES = 33
 //     println(paserk.type_prefix(PaserkLocal))    // k4.local.
 // ```
 pub enum PaserkType
-    // `k4.local.` — a symmetric key, which is SECRET.
+    // `k4.local.` — a symmetric key, which is secret.
     PaserkLocal
     // `k4.public.` — a verifying key, which is not.
     PaserkPublic
-    // `k4.secret.` — a signing key, which is SECRET.
+    // `k4.secret.` — a signing key, which is secret.
     PaserkSecret
     // `k4.lid.` — a local key's identifier, safe to log.
     PaserkLocalId
@@ -119,7 +215,13 @@ pub enum PaserkType
 //     println(paserk.type_prefix(PaserkSecretId))   // k4.sid.
 // ```
 pub fn type_prefix(t: PaserkType) -> Str []
-    todo("paseto-nv.paserk.type_prefix")
+    match t
+        PaserkLocal    => PASERK_LOCAL
+        PaserkPublic   => PASERK_PUBLIC
+        PaserkSecret   => PASERK_SECRET
+        PaserkLocalId  => PASERK_LOCAL_ID
+        PaserkPublicId => PASERK_PUBLIC_ID
+        PaserkSecretId => PASERK_SECRET_ID
 
 // The type a PASERK string begins with, or the refusal.
 //
@@ -132,9 +234,11 @@ pub fn type_prefix(t: PaserkType) -> Str []
 //         Err(_) => println("not a PASERK string this package reads")
 // ```
 pub fn type_of(s: Str) -> Result<PaserkType, PasError> []
-    todo("paseto-nv.paserk.type_of")
+    match kind_of(s)
+        Some(t) => Ok(t)
+        None    => Err(PasUnknownPaserkType(quote(s)))
 
-// Whether a type names a SECRET: `PaserkLocal` and `PaserkSecret`.
+// Whether a type names a secret: `PaserkLocal` and `PaserkSecret`.
 //
 // The predicate a config loader and a log redactor both want, and the
 // reason it is here rather than in either: there should be one
@@ -148,7 +252,10 @@ pub fn type_of(s: Str) -> Result<PaserkType, PasError> []
 //     println("${paserk.is_secret(PaserkLocalId)}")   // false
 // ```
 pub fn is_secret(t: PaserkType) -> Bool []
-    todo("paseto-nv.paserk.is_secret")
+    match t
+        PaserkLocal  => true
+        PaserkSecret => true
+        _            => false
 
 // ── Keys, written down ───────────────────────────────────────────────
 
@@ -165,7 +272,7 @@ pub fn is_secret(t: PaserkType) -> Bool []
 //         Err(_) => println("not 32 bytes")
 // ```
 pub fn local_to_string(k: PasLocalKey) -> Str []
-    todo("paseto-nv.paserk.local_to_string")
+    PASERK_LOCAL + b64(paskey.local_key_bytes(k))
 
 // The local key a `k4.local.` string names.
 //
@@ -182,7 +289,13 @@ pub fn local_to_string(k: PasLocalKey) -> Str []
 //         Err(_) => println("not a local key string")
 // ```
 pub fn local_from_string(s: Str) -> Result<PasLocalKey, PasError> []
-    todo("paseto-nv.paserk.local_from_string")
+    match key_data(s, PaserkLocal, "local")
+        Err(e)   => Err(e)
+        Ok(data) =>
+            if bytes.len(data) != PAS_LOCAL_KEY_BYTES
+                Err(PasBadPaserkData("local", bytes.len(data), PAS_LOCAL_KEY_BYTES))
+            else
+                paskey.local_key(data)
 
 // A public key as `k4.public.<base64url>`.
 //
@@ -197,7 +310,7 @@ pub fn local_from_string(s: Str) -> Result<PasLocalKey, PasError> []
 //         Err(_) => println("not a point")
 // ```
 pub fn public_to_string(k: PasPublicKey) -> Str []
-    todo("paseto-nv.paserk.public_to_string")
+    PASERK_PUBLIC + b64(bytes.from_byte_list(paskey.public_key_bytes(k)))
 
 // The public key a `k4.public.` string names.
 //
@@ -210,14 +323,20 @@ pub fn public_to_string(k: PasPublicKey) -> Str []
 //         Err(_) => println("not a public key string")
 // ```
 pub fn public_from_string(s: Str) -> Result<PasPublicKey, PasError> []
-    todo("paseto-nv.paserk.public_from_string")
+    match key_data(s, PaserkPublic, "public")
+        Err(e)   => Err(e)
+        Ok(data) =>
+            if bytes.len(data) != PAS_PUBLIC_KEY_BYTES
+                Err(PasBadPaserkData("public", bytes.len(data), PAS_PUBLIC_KEY_BYTES))
+            else
+                paskey.public_key(bytes.to_byte_list(data))
 
 // A secret key as `k4.secret.<base64url>`.
 //
-// SIXTY-FOUR BYTES, not thirty-two: the seed followed by the public
+// Sixty-four bytes, not thirty-two: the seed followed by the public
 // key, which is what Ed25519 implementations conventionally call a
 // secret key and what PASERK specifies.  ed25519-nv's own type holds
-// the 32-byte SEED, so this function is where the two conventions
+// the 32-byte seed, so this function is where the two conventions
 // meet, and it is the one place in the package where a length surprise
 // is likely.
 //
@@ -232,11 +351,11 @@ pub fn public_from_string(s: Str) -> Result<PasPublicKey, PasError> []
 //         Err(_) => println("not a seed")
 // ```
 pub fn secret_to_string(k: PasSecretKey) -> Str []
-    todo("paseto-nv.paserk.secret_to_string")
+    PASERK_SECRET + b64(secret_bytes(k))
 
 // The secret key a `k4.secret.` string names.
 //
-// Checks that the trailing 32 bytes ARE the public key the leading 32
+// Checks that the trailing 32 bytes are the public key the leading 32
 // derive, rather than trusting them.  A mismatched pair is a key file
 // that was edited or corrupted, and accepting it would produce a
 // signer whose tokens nobody can verify — discovered in production
@@ -251,13 +370,19 @@ pub fn secret_to_string(k: PasSecretKey) -> Str []
 //         Err(_) => println("not a secret key string")
 // ```
 pub fn secret_from_string(s: Str) -> Result<PasSecretKey, PasError> []
-    todo("paseto-nv.paserk.secret_from_string")
+    match key_data(s, PaserkSecret, "secret")
+        Err(e)   => Err(e)
+        Ok(data) =>
+            if bytes.len(data) != PAS_SEED_BYTES + PAS_PUBLIC_KEY_BYTES
+                Err(PasBadPaserkData("secret", bytes.len(data), PAS_SEED_BYTES + PAS_PUBLIC_KEY_BYTES))
+            else
+                secret_from_pair(data)
 
 // ── Identifiers ──────────────────────────────────────────────────────
 
 // A local key's identifier, `k4.lid.<base64url>`.
 //
-// ONE-WAY.  It is a BLAKE2b hash of the serialised key, so it names
+// one-way.  It is a BLAKE2b hash of the serialised key, so it names
 // the key without revealing it — which is what makes it the right
 // thing to put in a token's footer as a `kid` and in a log line beside
 // a rejection.  There is no function from an identifier back to a key
@@ -274,7 +399,7 @@ pub fn secret_from_string(s: Str) -> Result<PasSecretKey, PasError> []
 //         Err(_) => println("not 32 bytes")
 // ```
 pub fn local_id(k: PasLocalKey) -> Str []
-    todo("paseto-nv.paserk.local_id")
+    identifier(PASERK_LOCAL_ID, local_to_string(k))
 
 // A public key's identifier, `k4.pid.<base64url>`.
 //
@@ -289,7 +414,7 @@ pub fn local_id(k: PasLocalKey) -> Str []
 //         Err(_) => println("not a point")
 // ```
 pub fn public_id(k: PasPublicKey) -> Str []
-    todo("paseto-nv.paserk.public_id")
+    identifier(PASERK_PUBLIC_ID, public_to_string(k))
 
 // A secret key's identifier, `k4.sid.<base64url>`.
 //
@@ -307,7 +432,7 @@ pub fn public_id(k: PasPublicKey) -> Str []
 //         Err(_) => println("not a seed")
 // ```
 pub fn secret_id(k: PasSecretKey) -> Str []
-    todo("paseto-nv.paserk.secret_id")
+    identifier(PASERK_SECRET_ID, secret_to_string(k))
 
 // Whether a PASERK identifier string names this local key.
 //
@@ -328,7 +453,7 @@ pub fn secret_id(k: PasSecretKey) -> Str []
 //         Err(_) => println("not 32 bytes")
 // ```
 pub fn local_id_matches(k: PasLocalKey, id: Str) -> Bool []
-    todo("paseto-nv.paserk.local_id_matches")
+    same_text(local_id(k), id)
 
 // Whether a PASERK identifier string names this public key.
 //
@@ -343,4 +468,4 @@ pub fn local_id_matches(k: PasLocalKey, id: Str) -> Bool []
 //         Err(_) => println("not a point")
 // ```
 pub fn public_id_matches(k: PasPublicKey, id: Str) -> Bool []
-    todo("paseto-nv.paserk.public_id_matches")
+    same_text(public_id(k), id)
