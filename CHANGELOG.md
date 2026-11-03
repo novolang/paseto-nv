@@ -58,6 +58,12 @@ PASETO v4 `local` and `public`, and PASERK keys and identifiers.
   available offline. The `v4.public` side is checked against the published
   token of vector 4-S-1.
 
+This release requires novo 0.23.0 or later.
+
+## 0.0.5 — 2026-10-28
+
+The dependency requirement is raised: `chacha20-nv` from ^0.0.1 to ^0.0.5.  The newest version of each builds with no migration warning under the 0.22.0 compiler, and the older one drew E2050, E2052 or E2055 warnings into this package's build.  No signature and no behaviour changed.
+
 ## 0.0.4 — 2026-10-25
 
 A call that passes a variable to a `var` parameter now writes the `var` marker, which the 0.21.1 compiler asks for (E2050).  The package needs Novo 0.21.1 or later.  A file that names a sibling module's type, function or constant now has the `use` line for that module (E2033, E2003).  No signature and no behaviour changed.
